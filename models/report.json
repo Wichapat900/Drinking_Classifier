@@ -1,39 +1,39 @@
 {
-  "model": "GradientBoosting",
-  "cv_accuracy": 0.9734,
-  "test_accuracy": 0.9,
-  "test_f1_macro": 0.8416,
+  "model": "RandomForest",
+  "cv_accuracy": 0.9822,
+  "test_accuracy": 0.8214,
+  "test_f1_macro": 0.7726,
   "train_accuracy": 1.0,
-  "overfit_gap": 0.1,
+  "overfit_gap": 0.1786,
   "per_class": {
     "Coffee": {
       "precision": 1.0,
-      "recall": 0.881
+      "recall": 0.875
     },
     "Strawberry": {
-      "precision": 0.76,
-      "recall": 0.5758
+      "precision": 1.0,
+      "recall": 0.625
     },
     "Water": {
-      "precision": 0.8989,
-      "recall": 0.9697
+      "precision": 0.4444,
+      "recall": 1.0
     }
   },
   "confusion_matrix": [
     [
-      37,
-      1,
-      4
-    ],
-    [
+      14,
       0,
-      19,
-      14
+      2
     ],
     [
       0,
       5,
-      160
+      3
+    ],
+    [
+      0,
+      0,
+      4
     ]
   ],
   "labels": [
@@ -41,8 +41,8 @@
     "Strawberry",
     "Water"
   ],
-  "n_train_windows": 789,
-  "n_test_windows": 240,
+  "n_train_windows": 281,
+  "n_test_windows": 28,
   "feature_dim": 55,
   "win_sec": 3.0,
   "step_sec": 1.0,

@@ -37,7 +37,7 @@ C = {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-st.set_page_config(page_title="DrinkSense", page_icon="🥤",
+st.set_page_config(page_title="Drink_Classifier", page_icon="🥤",
                    layout="wide", initial_sidebar_state="expanded")
 
 st.markdown(f"""
@@ -267,7 +267,7 @@ def sidebar(model, report):
         <div style='padding:1rem 0 0.8rem;'>
           <div style='font-size:1.8rem; margin-bottom:6px;'>🥤</div>
           <div style='font-family:"Sora",sans-serif; font-size:1.3rem; color:white; font-weight:700; line-height:1;'>
-            DrinkSense
+            DrinkClassifier
           </div>
           <div style='font-family:"JetBrains Mono",monospace; font-size:0.55rem; color:{C["text_dim"]};
                       letter-spacing:0.12em; margin-top:4px;'>DRINKING GESTURE CLASSIFIER v1.0</div>
@@ -362,7 +362,7 @@ def main():
         <span style='font-size:1.6rem;'>🥤</span>
         <div>
           <span style='font-family:"Sora",sans-serif; font-size:1.25rem; color:white; font-weight:700;'>
-            DrinkSense
+            DrinkClassifier
           </span>
           <span style='font-family:"Inter",sans-serif; font-size:0.72rem; color:{C["text_dim"]};
                        margin-left:10px; letter-spacing:0.08em; text-transform:uppercase;'>
@@ -536,7 +536,7 @@ def main():
                      use_container_width=True, height=320, hide_index=True)
         st.download_button("⬇  Download CSV",
             data=df.to_csv(index=False).encode(),
-            file_name="drinksense_signal.csv", mime="text/csv")
+            file_name="drinkClassifier_signal.csv", mime="text/csv")
 
 
 if __name__ == "__main__":
