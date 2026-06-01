@@ -1,0 +1,53 @@
+{
+  "model": "GradientBoosting",
+  "cv_accuracy": 0.9734,
+  "test_accuracy": 0.9,
+  "test_f1_macro": 0.8416,
+  "train_accuracy": 1.0,
+  "overfit_gap": 0.1,
+  "per_class": {
+    "Coffee": {
+      "precision": 1.0,
+      "recall": 0.881
+    },
+    "Strawberry": {
+      "precision": 0.76,
+      "recall": 0.5758
+    },
+    "Water": {
+      "precision": 0.8989,
+      "recall": 0.9697
+    }
+  },
+  "confusion_matrix": [
+    [
+      37,
+      1,
+      4
+    ],
+    [
+      0,
+      19,
+      14
+    ],
+    [
+      0,
+      5,
+      160
+    ]
+  ],
+  "labels": [
+    "Coffee",
+    "Strawberry",
+    "Water"
+  ],
+  "n_train_windows": 789,
+  "n_test_windows": 240,
+  "feature_dim": 55,
+  "win_sec": 3.0,
+  "step_sec": 1.0,
+  "fs": 60,
+  "win_n": 180,
+  "step_n": 60,
+  "split": "file-level 80/20"
+}
