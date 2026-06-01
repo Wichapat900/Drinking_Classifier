@@ -132,8 +132,9 @@ tab1, tab2, tab3 = st.tabs(["📱 Live Record", "📂 Upload CSV", "📊 Stats"]
 # ════════════════════════════════════════════════════════════════
 with tab1:
 
-    # The component returns JSON: {"samples": [[x,y,z], ...], "csv": "..."}
-    # We use a key so Streamlit re-renders when data arrives
+    # After the user presses Stop with enough samples, the component shows two buttons:
+    #   ⬇ Download CSV   — triggers a local browser download, no round-trip needed
+    #   🔮 Use This Recording — posts samples to Streamlit via postMessage → instant predict
     accel_html = """
 <!DOCTYPE html>
 <html>
@@ -146,7 +147,7 @@ with tab1:
     background: #0d0d14;
     color: white;
     padding: 16px;
-    min-height: 280px;
+    min-height: 340px;
   }
 
   .axes {
@@ -170,14 +171,23 @@ with tab1:
     font-size: 0.82rem; color: #aaa; margin-bottom: 12px;
     background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px 12px;
   }
-  .dot {
-    width: 9px; height: 9px; border-radius: 50%; background: #444; flex-shrink: 0;
-  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #444; flex-shrink: 0; }
   .dot.rec { background: #ff4444; animation: blink 1s infinite; }
   .dot.ok  { background: #51cf66; }
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
 
+  /* Always-visible Start / Stop row */
   .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+
+  /* Post-stop action row — hidden until enough samples recorded */
+  .action-row {
+    display: none;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .action-row.visible { display: grid; }
+
   .btn {
     padding: 13px; border: none; border-radius: 12px;
     font-size: 0.95rem; font-weight: 700; cursor: pointer; transition: all 0.15s;
@@ -185,15 +195,11 @@ with tab1:
   .btn:active { transform: scale(0.96); }
   .btn-rec  { background: linear-gradient(135deg,#11998e,#38ef7d); color: #0a1f1a; }
   .btn-stop { background: linear-gradient(135deg,#f7971e,#ffd200); color: #1a1000; }
-  .btn-send { background: linear-gradient(135deg,#f953c6,#b91d73); color: white; grid-column: span 2; }
+  .btn-dl   { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
+              color: #ccc; }
+  .btn-dl:hover { background: rgba(255,255,255,0.14); }
+  .btn-use  { background: linear-gradient(135deg,#f953c6,#b91d73); color: white; }
   .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
-
-  .dl-btn {
-    width: 100%; padding: 10px; border: 1px solid rgba(255,255,255,0.15);
-    border-radius: 10px; background: transparent; color: #aaa;
-    font-size: 0.85rem; cursor: pointer; margin-top: 6px;
-  }
-  .dl-btn:hover { background: rgba(255,255,255,0.07); }
 
   .hint { font-size: 0.78rem; color: #555; text-align: center; margin-top: 8px; line-height: 1.5; }
   .err  { background: rgba(255,70,70,0.15); border: 1px solid #ff4444;
@@ -212,12 +218,18 @@ with tab1:
 
 <div class="status"><div class="dot" id="dot"></div><span id="stxt">Press Start to begin</span></div>
 
+<!-- Start / Stop -->
 <div class="btns">
   <button class="btn btn-rec"  id="btnS" onclick="startRec()">▶ Start</button>
   <button class="btn btn-stop" id="btnX" onclick="stopRec()" disabled>⏹ Stop</button>
-  <button class="btn btn-send" id="btnP" onclick="sendData()" disabled>🔮 Predict My Drink</button>
 </div>
-<button class="dl-btn" id="btnDL" onclick="downloadCSV()" style="display:none">⬇ Download CSV</button>
+
+<!-- Appears after a successful stop -->
+<div class="action-row" id="actionRow">
+  <button class="btn btn-dl"  onclick="downloadCSV()">⬇ Download CSV</button>
+  <button class="btn btn-use" onclick="sendPredict()">🔮 Use This Recording</button>
+</div>
+
 <p class="hint">Hold your phone naturally while drinking for 5–10 seconds</p>
 <div class="err" id="err"></div>
 
@@ -265,10 +277,10 @@ function onMotion(e) {
       `Recording… ${samples.length} samples (${s}s)`;
   }
 
-  ['x','y','z'].forEach((ax,i)=>{
-    const v=[lx,ly,lz][i];
+  ['x','y','z'].forEach((ax,i) => {
+    const v = [lx,ly,lz][i];
     wave[ax].push(v);
-    if(wave[ax].length > MAX_W) wave[ax].shift();
+    if (wave[ax].length > MAX_W) wave[ax].shift();
   });
   drawWave();
 }
@@ -279,10 +291,10 @@ function drawWave() {
   ctx.clearRect(0,0,W,H);
   const colors={x:'#ff6b6b',y:'#51cf66',z:'#339af0'};
   const sc = H/40;
-  ['x','y','z'].forEach(ax=>{
+  ['x','y','z'].forEach(ax => {
     const h=wave[ax]; if(h.length<2) return;
     ctx.beginPath(); ctx.strokeStyle=colors[ax]; ctx.lineWidth=1.5;
-    h.forEach((v,i)=>{
+    h.forEach((v,i) => {
       const px=(i/(MAX_W-1))*W, py=H/2-v*sc;
       i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
     });
@@ -294,8 +306,8 @@ function drawWave() {
 async function startRec() {
   if (!await ensurePerm()) return;
   recording = true; samples = [];
-  set('btnS', true); set('btnX', false); set('btnP', true);
-  document.getElementById('btnDL').style.display = 'none';
+  set('btnS', true); set('btnX', false);
+  document.getElementById('actionRow').classList.remove('visible');
   document.getElementById('dot').className = 'dot rec';
   document.getElementById('stxt').textContent = 'Recording…';
   hideErr();
@@ -305,33 +317,40 @@ function stopRec() {
   recording = false;
   set('btnS', false); set('btnX', true);
   const ok = samples.length >= NEED;
-  set('btnP', !ok);
   document.getElementById('dot').className = ok ? 'dot ok' : 'dot';
-  document.getElementById('stxt').textContent = ok
-    ? `✓ ${samples.length} samples — ready to predict!`
-    : `Only ${samples.length} samples — need ${NEED}+. Record longer.`;
-  if (ok) document.getElementById('btnDL').style.display = 'block';
+  if (ok) {
+    document.getElementById('stxt').textContent =
+      `✓ ${samples.length} samples ready — download or predict!`;
+    document.getElementById('actionRow').classList.add('visible');
+  } else {
+    document.getElementById('stxt').textContent =
+      `Only ${samples.length} samples — need ${NEED}+. Record longer.`;
+  }
 }
 
 function set(id, disabled) { document.getElementById(id).disabled = disabled; }
 
-// ── Send to Streamlit ────────────────────────────────────────
-function sendData() {
-  if (samples.length < NEED) { showErr('Not enough data.'); return; }
-  // Send via Streamlit component messaging
-  const payload = JSON.stringify({ samples: samples });
-  window.parent.postMessage({ type: 'streamlit:setComponentValue', value: payload }, '*');
-}
-
 // ── Download CSV ─────────────────────────────────────────────
 function downloadCSV() {
+  if (samples.length < NEED) { showErr('Not enough data.'); return; }
   let csv = 'timestamp,x,y,z\\n';
   const t0 = Date.now() - samples.length * 16;
-  samples.forEach((s,i) => { csv += `${t0 + i*16},${s[0]},${s[1]},${s[2]}\\n`; });
+  samples.forEach((s,i) => {
+    csv += `${t0 + i*16},${s[0].toFixed(4)},${s[1].toFixed(4)},${s[2].toFixed(4)}\\n`;
+  });
   const a = document.createElement('a');
   a.href = 'data:text/csv,' + encodeURIComponent(csv);
   a.download = 'recording.csv';
   a.click();
+}
+
+// ── Use This Recording → send to Streamlit for instant prediction ──
+function sendPredict() {
+  if (samples.length < NEED) { showErr('Not enough data.'); return; }
+  window.parent.postMessage({
+    type: 'streamlit:setComponentValue',
+    value: JSON.stringify({ samples: samples })
+  }, '*');
 }
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -346,72 +365,106 @@ drawWave();
 </html>
 """
 
-    # Render the accelerometer component
-    result = components.html(accel_html, height=420, scrolling=False)
+    # ── Render component; capture postMessage value ───────────────────────────
+    result = components.html(accel_html, height=460, scrolling=False)
+
+    # When "Use This Recording" is pressed the component sets its value via postMessage.
+    # Streamlit's html() returns that value here on the next rerun.
+    if result is not None:
+        try:
+            payload = json.loads(result)
+            raw_samples = payload.get("samples", [])
+            if len(raw_samples) >= WINDOW_SIZE:
+                st.session_state["live_samples"]      = raw_samples
+                st.session_state["live_auto_predict"] = True
+        except Exception:
+            pass
 
     st.markdown("---")
 
-    # ── Manual JSON paste fallback (receives postMessage data) ──
-    st.markdown("##### Paste recorded data to predict")
-    st.caption("After stopping, copy the data from the recorder or use the Download CSV button above, then paste below:")
+    # ── Auto-predict when samples arrive via postMessage ─────────────────────
+    if st.session_state.get("live_auto_predict") and st.session_state.get("live_samples"):
+        samples_to_use = st.session_state["live_samples"]
+        st.session_state["live_auto_predict"] = False   # consume flag
 
-    raw_json = st.text_area(
-        "Paste raw samples as JSON array  `[[x,y,z], [x,y,z], ...]`  or CSV rows  `x,y,z`",
-        height=100,
-        placeholder='[[-1.2, -9.5, -0.3], [-1.1, -9.6, -0.2], ...]',
-        key="live_paste"
-    )
+        window       = samples_to_use[-WINDOW_SIZE:]
+        feats        = extract_features(window)
+        feats_scaled = scaler.transform(feats)
+        pred         = int(model.predict(feats_scaled)[0])
+        proba        = model.predict_proba(feats_scaled)[0]
 
-    if st.button("🔮 Predict", key="btn_live_predict", use_container_width=True):
-        samples = []
-        raw = raw_json.strip()
-        if not raw:
-            st.warning("Paste your recorded data first.")
-        else:
-            try:
-                # Try JSON array first
-                if raw.startswith('['):
-                    parsed = json.loads(raw)
-                    # Could be [[x,y,z],...] or [{"x":...},...]
-                    for item in parsed:
-                        if isinstance(item, list) and len(item) >= 3:
-                            samples.append([float(item[0]), float(item[1]), float(item[2])])
-                        elif isinstance(item, dict):
-                            samples.append([float(item['x']), float(item['y']), float(item['z'])])
-                else:
-                    # CSV rows: x,y,z or timestamp,x,y,z
-                    for line in raw.splitlines():
-                        parts = [float(v) for v in line.split(',')]
-                        if len(parts) == 3:
-                            samples.append(parts)
-                        elif len(parts) == 4:
-                            samples.append(parts[1:])
-            except Exception as e:
-                st.error(f"Parse error: {e}")
-                samples = []
-
-            if samples and len(samples) < WINDOW_SIZE:
-                st.warning(f"Need at least {WINDOW_SIZE} samples, got {len(samples)}. Record longer.")
-            elif samples:
-                window       = samples[-WINDOW_SIZE:]
-                feats        = extract_features(window)
-                feats_scaled = scaler.transform(feats)
-                pred         = int(model.predict(feats_scaled)[0])
-                proba        = model.predict_proba(feats_scaled)[0]
-
-                color = LABEL_COLORS[pred]
-                st.markdown(f"""
+        color = LABEL_COLORS[pred]
+        st.markdown(f"""
 <div class="result-box" style="border-color:{color}">
   <div class="result-emoji">{LABEL_NAMES[pred].split()[-1]}</div>
   <div class="result-name">{LABEL_NAMES[pred]}</div>
   <div class="result-desc">{LABEL_DESCS[pred]}</div>
 </div>""", unsafe_allow_html=True)
 
-                st.markdown("#### Confidence")
-                for name, p in zip(LABEL_NAMES.values(), proba):
-                    c1, c2 = st.columns([3, 1])
-                    c1.progress(float(p), text=name)
-                    c2.markdown(f"**{p*100:.1f}%**")
+        st.markdown("#### Confidence")
+        for name, p in zip(LABEL_NAMES.values(), proba):
+            c1, c2 = st.columns([3, 1])
+            c1.progress(float(p), text=name)
+            c2.markdown(f"**{p*100:.1f}%**")
+
+    # ── Manual paste fallback (collapsed by default) ──────────────────────────
+    with st.expander("✏️ Paste data manually (fallback)"):
+        st.caption("Paste a JSON array `[[x,y,z], ...]` or CSV rows `x,y,z` / `timestamp,x,y,z`")
+
+        raw_json = st.text_area(
+            "Recorded samples",
+            height=100,
+            placeholder='[[-1.2, -9.5, -0.3], [-1.1, -9.6, -0.2], ...]',
+            key="live_paste"
+        )
+
+        if st.button("🔮 Predict from pasted data", key="btn_live_predict", use_container_width=True):
+            samples = []
+            raw = raw_json.strip()
+            if not raw:
+                st.warning("Paste your recorded data first.")
+            else:
+                try:
+                    if raw.startswith('['):
+                        parsed = json.loads(raw)
+                        for item in parsed:
+                            if isinstance(item, list) and len(item) >= 3:
+                                samples.append([float(item[0]), float(item[1]), float(item[2])])
+                            elif isinstance(item, dict):
+                                samples.append([float(item['x']), float(item['y']), float(item['z'])])
+                    else:
+                        for line in raw.splitlines():
+                            parts = [float(v) for v in line.split(',')]
+                            if len(parts) == 3:
+                                samples.append(parts)
+                            elif len(parts) == 4:
+                                samples.append(parts[1:])
+                except Exception as e:
+                    st.error(f"Parse error: {e}")
+                    samples = []
+
+                if samples and len(samples) < WINDOW_SIZE:
+                    st.warning(f"Need at least {WINDOW_SIZE} samples, got {len(samples)}. Record longer.")
+                elif samples:
+                    window       = samples[-WINDOW_SIZE:]
+                    feats        = extract_features(window)
+                    feats_scaled = scaler.transform(feats)
+                    pred         = int(model.predict(feats_scaled)[0])
+                    proba        = model.predict_proba(feats_scaled)[0]
+
+                    color = LABEL_COLORS[pred]
+                    st.markdown(f"""
+<div class="result-box" style="border-color:{color}">
+  <div class="result-emoji">{LABEL_NAMES[pred].split()[-1]}</div>
+  <div class="result-name">{LABEL_NAMES[pred]}</div>
+  <div class="result-desc">{LABEL_DESCS[pred]}</div>
+</div>""", unsafe_allow_html=True)
+
+                    st.markdown("#### Confidence")
+                    for name, p in zip(LABEL_NAMES.values(), proba):
+                        c1, c2 = st.columns([3, 1])
+                        c1.progress(float(p), text=name)
+                        c2.markdown(f"**{p*100:.1f}%**")
 
     st.markdown("""
 <div class="instr-card" style="margin-top:1rem">
