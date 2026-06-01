@@ -256,10 +256,12 @@ async function ensurePerm() {
       if (r !== 'granted') { showErr('Motion permission denied.'); return false; }
     } catch(e) { showErr('Permission error: ' + e.message); return false; }
   }
-  window.addEventListener('devicemotion', onMotion);
   hasPerm = true;
   return true;
 }
+
+function startListener()  { window.addEventListener('devicemotion', onMotion); }
+function stopListener()   { window.removeEventListener('devicemotion', onMotion); }
 
 // ── Motion handler ──────────────────────────────────────────
 function onMotion(e) {
@@ -306,6 +308,7 @@ function drawWave() {
 async function startRec() {
   if (!await ensurePerm()) return;
   recording = true; samples = [];
+  startListener();
   set('btnS', true); set('btnX', false);
   document.getElementById('actionRow').classList.remove('visible');
   document.getElementById('dot').className = 'dot rec';
@@ -315,6 +318,7 @@ async function startRec() {
 
 function stopRec() {
   recording = false;
+  stopListener();
   set('btnS', false); set('btnX', true);
   const ok = samples.length >= NEED;
   document.getElementById('dot').className = ok ? 'dot ok' : 'dot';
@@ -344,13 +348,44 @@ function downloadCSV() {
   a.click();
 }
 
-// ── Use This Recording → send to Streamlit for instant prediction ──
+// ── Use This Recording → inject into Streamlit textarea in parent DOM ──
 function sendPredict() {
   if (samples.length < NEED) { showErr('Not enough data.'); return; }
-  window.parent.postMessage({
-    type: 'streamlit:setComponentValue',
-    value: JSON.stringify({ samples: samples })
-  }, '*');
+  const json = JSON.stringify(samples);
+
+  // Find the hidden textarea Streamlit renders for key="accel_bridge"
+  // It lives in the parent document (outside this iframe)
+  try {
+    const parentDoc = window.parent.document;
+    // Streamlit renders textareas; find ours by aria-label or data-testid fallback
+    const areas = parentDoc.querySelectorAll('textarea');
+    let target = null;
+    for (const a of areas) {
+      if (a.getAttribute('aria-label') === 'accel_bridge' ||
+          a.closest('[data-testid="stTextArea"]')?.querySelector('label')?.textContent?.trim() === 'accel_bridge') {
+        target = a; break;
+      }
+    }
+    if (!target) {
+      // fallback: any hidden textarea with placeholder matching our sentinel
+      for (const a of areas) {
+        if (a.placeholder === '__ACCEL_BRIDGE__') { target = a; break; }
+      }
+    }
+    if (target) {
+      // React controlled input: need nativeInputValueSetter
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+        window.parent.HTMLTextAreaElement.prototype, 'value').set;
+      nativeInputValueSetter.call(target, json);
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+      target.dispatchEvent(new Event('change', { bubbles: true }));
+      document.getElementById('stxt').textContent = '✅ Sent! Click "Predict from Recording" above.';
+    } else {
+      showErr('Bridge not ready — try again in a moment.');
+    }
+  } catch(e) {
+    showErr('Cross-frame error: ' + e.message);
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -365,47 +400,65 @@ drawWave();
 </html>
 """
 
-    # ── Render component; capture postMessage value ───────────────────────────
-    result = components.html(accel_html, height=460, scrolling=False)
-
-    # When "Use This Recording" is pressed the component sets its value via postMessage.
-    # Streamlit's html() returns that value here on the next rerun.
-    if result is not None:
-        try:
-            payload = json.loads(result)
-            raw_samples = payload.get("samples", [])
-            if len(raw_samples) >= WINDOW_SIZE:
-                st.session_state["live_samples"]      = raw_samples
-                st.session_state["live_auto_predict"] = True
-        except Exception:
-            pass
+    # ── Render the accelerometer iframe ──────────────────────────────────────
+    components.html(accel_html, height=460, scrolling=False)
 
     st.markdown("---")
 
-    # ── Auto-predict when samples arrive via postMessage ─────────────────────
-    if st.session_state.get("live_auto_predict") and st.session_state.get("live_samples"):
-        samples_to_use = st.session_state["live_samples"]
-        st.session_state["live_auto_predict"] = False   # consume flag
+    # ── Bridge textarea: the iframe JS injects JSON samples here ─────────────
+    # Labelled "accel_bridge" so the JS can find it by aria-label in the parent DOM.
+    bridge_val = st.text_area(
+        "accel_bridge",
+        key="accel_bridge",
+        placeholder="__ACCEL_BRIDGE__",
+        label_visibility="collapsed",
+        height=68,
+    )
 
-        window       = samples_to_use[-WINDOW_SIZE:]
-        feats        = extract_features(window)
-        feats_scaled = scaler.transform(feats)
-        pred         = int(model.predict(feats_scaled)[0])
-        proba        = model.predict_proba(feats_scaled)[0]
+    # ── Primary predict button (reads from bridge or session_state) ───────────
+    col_pred, col_clear = st.columns([3, 1])
+    with col_pred:
+        predict_clicked = st.button(
+            "🔮 Predict from Recording", key="btn_bridge_predict", use_container_width=True
+        )
+    with col_clear:
+        if st.button("✕ Clear", key="btn_clear", use_container_width=True):
+            st.session_state["accel_bridge"] = ""
+            st.rerun()
 
-        color = LABEL_COLORS[pred]
-        st.markdown(f"""
+    raw_bridge = (bridge_val or "").strip()
+    if predict_clicked and raw_bridge:
+        try:
+            parsed = json.loads(raw_bridge)
+            # Accepts [[x,y,z],...] directly
+            samples_bridge = []
+            for item in parsed:
+                if isinstance(item, list) and len(item) >= 3:
+                    samples_bridge.append([float(item[0]), float(item[1]), float(item[2])])
+            if len(samples_bridge) < WINDOW_SIZE:
+                st.warning(f"Only {len(samples_bridge)} samples received — record for longer.")
+            else:
+                window       = samples_bridge[-WINDOW_SIZE:]
+                feats        = extract_features(window)
+                feats_scaled = scaler.transform(feats)
+                pred         = int(model.predict(feats_scaled)[0])
+                proba        = model.predict_proba(feats_scaled)[0]
+                color        = LABEL_COLORS[pred]
+                st.markdown(f"""
 <div class="result-box" style="border-color:{color}">
   <div class="result-emoji">{LABEL_NAMES[pred].split()[-1]}</div>
   <div class="result-name">{LABEL_NAMES[pred]}</div>
   <div class="result-desc">{LABEL_DESCS[pred]}</div>
 </div>""", unsafe_allow_html=True)
-
-        st.markdown("#### Confidence")
-        for name, p in zip(LABEL_NAMES.values(), proba):
-            c1, c2 = st.columns([3, 1])
-            c1.progress(float(p), text=name)
-            c2.markdown(f"**{p*100:.1f}%**")
+                st.markdown("#### Confidence")
+                for name, p in zip(LABEL_NAMES.values(), proba):
+                    c1, c2 = st.columns([3, 1])
+                    c1.progress(float(p), text=name)
+                    c2.markdown(f"**{p*100:.1f}%**")
+        except Exception as e:
+            st.error(f"Could not parse recording data: {e}")
+    elif predict_clicked and not raw_bridge:
+        st.warning("No recording received yet — press **Use This Recording** in the recorder first.")
 
     # ── Manual paste fallback (collapsed by default) ──────────────────────────
     with st.expander("✏️ Paste data manually (fallback)"):
