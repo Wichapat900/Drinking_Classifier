@@ -133,20 +133,6 @@ tab1, tab2, tab3 = st.tabs(["📱 Live Record", "📂 Upload CSV", "📊 Stats"]
 
 with tab1:
 
-    # ── Decode samples passed via ?d= query param (from "Use This Recording") ──
-    import base64 as _b64
-    _qp = st.query_params.get("d", "")
-    if _qp:
-        try:
-            _decoded = _b64.b64decode(_qp.encode()).decode()
-            _parsed  = json.loads(_decoded)
-            _samps   = [[float(r[0]), float(r[1]), float(r[2])] for r in _parsed if len(r) >= 3]
-            if len(_samps) >= WINDOW_SIZE:
-                st.session_state["live_samples"] = _samps
-        except Exception:
-            pass
-        st.query_params.clear()
-
     accel_html = """
 <!DOCTYPE html>
 <html>
@@ -194,10 +180,9 @@ with tab1:
   <button class="btn btn-stop" id="btnX" onclick="stopRec()" disabled>&#9209; Stop</button>
 </div>
 <div class="action-row" id="actionRow">
-  <button class="btn btn-dl"  onclick="downloadCSV()">&#11015; Download CSV</button>
-  <button class="btn btn-use" onclick="sendPredict()">&#128302; Use This Recording</button>
+  <button class="btn btn-use" onclick="downloadCSV()" style="grid-column:span 2">&#11015; Download CSV &amp; Predict in Tab 2</button>
 </div>
-<p class="hint">Hold your phone naturally while drinking for 5-10 seconds</p>
+<p class="hint">Record for 5-10 seconds, then download the CSV and upload it in the <b>Upload CSV</b> tab to predict</p>
 <div class="err" id="err"></div>
 <script>
 const NEED=60;
@@ -276,15 +261,6 @@ function downloadCSV(){
   a.href='data:text/csv,'+encodeURIComponent(csv);a.download='recording.csv';a.click();
 }
 
-function sendPredict(){
-  if(samples.length<NEED){showErr('Not enough data.');return;}
-  const compact=samples.map(s=>[+(s[0].toFixed(3)),+(s[1].toFixed(3)),+(s[2].toFixed(3))]);
-  const b64=btoa(JSON.stringify(compact));
-  const url=new URL(window.parent.location.href);
-  url.searchParams.set('d',b64);
-  window.parent.location.href=url.toString();
-}
-
 function showErr(m){const e=document.getElementById('err');e.textContent='\u26a0 '+m;e.style.display='block';}
 function hideErr(){document.getElementById('err').style.display='none';}
 drawWave();
@@ -293,79 +269,11 @@ drawWave();
 </html>
 """
 
-    components.html(accel_html, height=460, scrolling=False)
-
-    st.markdown("---")
-
-    # ── Show prediction if samples arrived via ?d= param ─────────────────────
-    live_samples = st.session_state.get("live_samples")
-    if live_samples:
-        st.session_state.pop("live_samples")
-        window_s     = live_samples[-WINDOW_SIZE:]
-        feats        = extract_features(window_s)
-        feats_scaled = scaler.transform(feats)
-        pred         = int(model.predict(feats_scaled)[0])
-        proba        = model.predict_proba(feats_scaled)[0]
-        color        = LABEL_COLORS[pred]
-        st.markdown(f"""
-<div class="result-box" style="border-color:{color}">
-  <div class="result-emoji">{LABEL_NAMES[pred].split()[-1]}</div>
-  <div class="result-name">{LABEL_NAMES[pred]}</div>
-  <div class="result-desc">{LABEL_DESCS[pred]}</div>
-</div>""", unsafe_allow_html=True)
-        st.markdown("#### Confidence")
-        for name, p in zip(LABEL_NAMES.values(), proba):
-            c1, c2 = st.columns([3, 1])
-            c1.progress(float(p), text=name)
-            c2.markdown(f"**{p*100:.1f}%**")
-
-    # ── Manual paste fallback ─────────────────────────────────────────────────
-    with st.expander("\u270f\ufe0f Paste data manually (fallback)"):
-        st.caption("Paste a JSON array `[[x,y,z], ...]` or CSV rows `x,y,z` / `timestamp,x,y,z`")
-        raw_json = st.text_area("Recorded samples", height=100,
-            placeholder='[[-1.2, -9.5, -0.3], [-1.1, -9.6, -0.2], ...]', key="live_paste")
-        if st.button("\U0001f52e Predict from pasted data", key="btn_live_predict", use_container_width=True):
-            samples_p = []
-            raw = raw_json.strip()
-            if not raw:
-                st.warning("Paste your recorded data first.")
-            else:
-                try:
-                    if raw.startswith('['):
-                        for item in json.loads(raw):
-                            if isinstance(item, list) and len(item) >= 3:
-                                samples_p.append([float(item[0]), float(item[1]), float(item[2])])
-                    else:
-                        for line in raw.splitlines():
-                            parts = [float(v) for v in line.split(',')]
-                            if len(parts) == 3:   samples_p.append(parts)
-                            elif len(parts) == 4: samples_p.append(parts[1:])
-                except Exception as e:
-                    st.error(f"Parse error: {e}")
-                if samples_p and len(samples_p) < WINDOW_SIZE:
-                    st.warning(f"Need at least {WINDOW_SIZE} samples, got {len(samples_p)}.")
-                elif samples_p:
-                    window_s     = samples_p[-WINDOW_SIZE:]
-                    feats        = extract_features(window_s)
-                    feats_scaled = scaler.transform(feats)
-                    pred         = int(model.predict(feats_scaled)[0])
-                    proba        = model.predict_proba(feats_scaled)[0]
-                    color        = LABEL_COLORS[pred]
-                    st.markdown(f"""
-<div class="result-box" style="border-color:{color}">
-  <div class="result-emoji">{LABEL_NAMES[pred].split()[-1]}</div>
-  <div class="result-name">{LABEL_NAMES[pred]}</div>
-  <div class="result-desc">{LABEL_DESCS[pred]}</div>
-</div>""", unsafe_allow_html=True)
-                    st.markdown("#### Confidence")
-                    for name, p in zip(LABEL_NAMES.values(), proba):
-                        c1, c2 = st.columns([3, 1])
-                        c1.progress(float(p), text=name)
-                        c2.markdown(f"**{p*100:.1f}%**")
+    components.html(accel_html, height=440, scrolling=False)
 
     st.markdown("""
 <div class="instr-card" style="margin-top:1rem">
-\u26a0\ufe0f <b>iOS users:</b> The accelerometer requires HTTPS + a permission prompt.<br>
+⚠️ <b>iOS users:</b> The accelerometer requires HTTPS + a permission prompt.<br>
 Streamlit Cloud provides HTTPS automatically.<br>
 For local testing on your phone, run: <code>npx ngrok http 8501</code> and open the ngrok URL.
 </div>
