@@ -130,11 +130,23 @@ tab1, tab2, tab3 = st.tabs(["📱 Live Record", "📂 Upload CSV", "📊 Stats"]
 # ════════════════════════════════════════════════════════════════
 # TAB 1 — Built-in accelerometer
 # ════════════════════════════════════════════════════════════════
+
 with tab1:
 
-    # After the user presses Stop with enough samples, the component shows two buttons:
-    #   ⬇ Download CSV   — triggers a local browser download, no round-trip needed
-    #   🔮 Use This Recording — posts samples to Streamlit via postMessage → instant predict
+    # ── Decode samples passed via ?d= query param (from "Use This Recording") ──
+    import base64 as _b64
+    _qp = st.query_params.get("d", "")
+    if _qp:
+        try:
+            _decoded = _b64.b64decode(_qp.encode()).decode()
+            _parsed  = json.loads(_decoded)
+            _samps   = [[float(r[0]), float(r[1]), float(r[2])] for r in _parsed if len(r) >= 3]
+            if len(_samps) >= WINDOW_SIZE:
+                st.session_state["live_samples"] = _samps
+        except Exception:
+            pass
+        st.query_params.clear()
+
     accel_html = """
 <!DOCTYPE html>
 <html>
@@ -142,377 +154,209 @@ with tab1:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    background: #0d0d14;
-    color: white;
-    padding: 16px;
-    min-height: 340px;
-  }
-
-  .axes {
-    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 14px;
-  }
-  .axis-box {
-    background: rgba(255,255,255,0.07); border-radius: 12px;
-    padding: 10px; text-align: center;
-  }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0d0d14; color: white; padding: 16px; min-height: 340px; }
+  .axes { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+  .axis-box { background: rgba(255,255,255,0.07); border-radius: 12px; padding: 10px; text-align: center; }
   .axis-label { font-size: 0.7rem; opacity: 0.55; margin-bottom: 3px; }
-  .axis-val   { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .axis-val { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
   .ax { color: #ff6b6b; } .ay { color: #51cf66; } .az { color: #339af0; }
-
-  canvas {
-    width: 100%; height: 80px; display: block;
-    background: rgba(0,0,0,0.4); border-radius: 10px; margin-bottom: 12px;
-  }
-
-  .status {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 0.82rem; color: #aaa; margin-bottom: 12px;
-    background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px 12px;
-  }
+  canvas { width: 100%; height: 80px; display: block; background: rgba(0,0,0,0.4); border-radius: 10px; margin-bottom: 12px; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; color: #aaa; margin-bottom: 12px; background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px 12px; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: #444; flex-shrink: 0; }
   .dot.rec { background: #ff4444; animation: blink 1s infinite; }
   .dot.ok  { background: #51cf66; }
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
-
-  /* Always-visible Start / Stop row */
   .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
-
-  /* Post-stop action row — hidden until enough samples recorded */
-  .action-row {
-    display: none;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    margin-bottom: 10px;
-  }
+  .action-row { display: none; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
   .action-row.visible { display: grid; }
-
-  .btn {
-    padding: 13px; border: none; border-radius: 12px;
-    font-size: 0.95rem; font-weight: 700; cursor: pointer; transition: all 0.15s;
-  }
+  .btn { padding: 13px; border: none; border-radius: 12px; font-size: 0.95rem; font-weight: 700; cursor: pointer; transition: all 0.15s; }
   .btn:active { transform: scale(0.96); }
   .btn-rec  { background: linear-gradient(135deg,#11998e,#38ef7d); color: #0a1f1a; }
   .btn-stop { background: linear-gradient(135deg,#f7971e,#ffd200); color: #1a1000; }
-  .btn-dl   { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
-              color: #ccc; }
+  .btn-dl   { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18); color: #ccc; }
   .btn-dl:hover { background: rgba(255,255,255,0.14); }
   .btn-use  { background: linear-gradient(135deg,#f953c6,#b91d73); color: white; }
   .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
-
   .hint { font-size: 0.78rem; color: #555; text-align: center; margin-top: 8px; line-height: 1.5; }
-  .err  { background: rgba(255,70,70,0.15); border: 1px solid #ff4444;
-          border-radius: 8px; padding: 10px; font-size: 0.82rem; margin-top: 8px; display:none; }
+  .err  { background: rgba(255,70,70,0.15); border: 1px solid #ff4444; border-radius: 8px; padding: 10px; font-size: 0.82rem; margin-top: 8px; display:none; }
 </style>
 </head>
 <body>
-
 <div class="axes">
   <div class="axis-box"><div class="axis-label">X</div><div class="axis-val ax" id="vx">0.00</div></div>
   <div class="axis-box"><div class="axis-label">Y</div><div class="axis-val ay" id="vy">0.00</div></div>
   <div class="axis-box"><div class="axis-label">Z</div><div class="axis-val az" id="vz">0.00</div></div>
 </div>
-
 <canvas id="cv" width="460" height="80"></canvas>
-
 <div class="status"><div class="dot" id="dot"></div><span id="stxt">Press Start to begin</span></div>
-
-<!-- Start / Stop -->
 <div class="btns">
-  <button class="btn btn-rec"  id="btnS" onclick="startRec()">▶ Start</button>
-  <button class="btn btn-stop" id="btnX" onclick="stopRec()" disabled>⏹ Stop</button>
+  <button class="btn btn-rec"  id="btnS" onclick="startRec()">&#9654; Start</button>
+  <button class="btn btn-stop" id="btnX" onclick="stopRec()" disabled>&#9209; Stop</button>
 </div>
-
-<!-- Appears after a successful stop -->
 <div class="action-row" id="actionRow">
-  <button class="btn btn-dl"  onclick="downloadCSV()">⬇ Download CSV</button>
-  <button class="btn btn-use" onclick="sendPredict()">🔮 Use This Recording</button>
+  <button class="btn btn-dl"  onclick="downloadCSV()">&#11015; Download CSV</button>
+  <button class="btn btn-use" onclick="sendPredict()">&#128302; Use This Recording</button>
 </div>
-
-<p class="hint">Hold your phone naturally while drinking for 5–10 seconds</p>
+<p class="hint">Hold your phone naturally while drinking for 5-10 seconds</p>
 <div class="err" id="err"></div>
-
 <script>
-const NEED = 60;
-let recording = false, samples = [], hasPerm = false;
-let lx = 0, ly = 0, lz = 0;
-const wave = { x:[], y:[], z:[] };
-const MAX_W = 220;
+const NEED=60;
+let recording=false,samples=[],hasPerm=false,lx=0,ly=0,lz=0;
+const wave={x:[],y:[],z:[]},MAX_W=220;
+const canvas=document.getElementById('cv'),ctx=canvas.getContext('2d');
 
-const canvas = document.getElementById('cv');
-const ctx    = canvas.getContext('2d');
-
-// ── Permission ──────────────────────────────────────────────
-async function ensurePerm() {
-  if (hasPerm) return true;
-  if (typeof DeviceMotionEvent === 'undefined') {
-    showErr('DeviceMotionEvent not available on this browser.');
-    return false;
+async function ensurePerm(){
+  if(hasPerm)return true;
+  if(typeof DeviceMotionEvent==='undefined'){showErr('DeviceMotionEvent not available.');return false;}
+  if(typeof DeviceMotionEvent.requestPermission==='function'){
+    try{const r=await DeviceMotionEvent.requestPermission();if(r!=='granted'){showErr('Permission denied.');return false;}}
+    catch(e){showErr('Permission error: '+e.message);return false;}
   }
-  if (typeof DeviceMotionEvent.requestPermission === 'function') {
-    try {
-      const r = await DeviceMotionEvent.requestPermission();
-      if (r !== 'granted') { showErr('Motion permission denied.'); return false; }
-    } catch(e) { showErr('Permission error: ' + e.message); return false; }
-  }
-  hasPerm = true;
-  return true;
+  hasPerm=true;return true;
 }
+function startListener(){window.addEventListener('devicemotion',onMotion);}
+function stopListener(){window.removeEventListener('devicemotion',onMotion);}
 
-function startListener()  { window.addEventListener('devicemotion', onMotion); }
-function stopListener()   { window.removeEventListener('devicemotion', onMotion); }
-
-// ── Motion handler ──────────────────────────────────────────
-function onMotion(e) {
-  const a = e.accelerationIncludingGravity;
-  if (!a) return;
-  lx = a.x ?? 0; ly = a.y ?? 0; lz = a.z ?? 0;
-  document.getElementById('vx').textContent = lx.toFixed(2);
-  document.getElementById('vy').textContent = ly.toFixed(2);
-  document.getElementById('vz').textContent = lz.toFixed(2);
-
-  if (recording) {
-    samples.push([lx, ly, lz]);
-    const s = (samples.length / 60).toFixed(1);
-    document.getElementById('stxt').textContent =
-      `Recording… ${samples.length} samples (${s}s)`;
+function onMotion(e){
+  const a=e.accelerationIncludingGravity;if(!a)return;
+  lx=a.x??0;ly=a.y??0;lz=a.z??0;
+  document.getElementById('vx').textContent=lx.toFixed(2);
+  document.getElementById('vy').textContent=ly.toFixed(2);
+  document.getElementById('vz').textContent=lz.toFixed(2);
+  if(recording){
+    samples.push([lx,ly,lz]);
+    document.getElementById('stxt').textContent=`Recording... ${samples.length} samples (${(samples.length/60).toFixed(1)}s)`;
   }
-
-  ['x','y','z'].forEach((ax,i) => {
-    const v = [lx,ly,lz][i];
-    wave[ax].push(v);
-    if (wave[ax].length > MAX_W) wave[ax].shift();
-  });
+  ['x','y','z'].forEach((ax,i)=>{const v=[lx,ly,lz][i];wave[ax].push(v);if(wave[ax].length>MAX_W)wave[ax].shift();});
   drawWave();
 }
 
-// ── Waveform ────────────────────────────────────────────────
-function drawWave() {
-  const W=canvas.width, H=canvas.height;
-  ctx.clearRect(0,0,W,H);
+function drawWave(){
+  const W=canvas.width,H=canvas.height;ctx.clearRect(0,0,W,H);
   const colors={x:'#ff6b6b',y:'#51cf66',z:'#339af0'};
-  const sc = H/40;
-  ['x','y','z'].forEach(ax => {
-    const h=wave[ax]; if(h.length<2) return;
-    ctx.beginPath(); ctx.strokeStyle=colors[ax]; ctx.lineWidth=1.5;
-    h.forEach((v,i) => {
-      const px=(i/(MAX_W-1))*W, py=H/2-v*sc;
-      i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
-    });
+  ['x','y','z'].forEach(ax=>{
+    const h=wave[ax];if(h.length<2)return;
+    ctx.beginPath();ctx.strokeStyle=colors[ax];ctx.lineWidth=1.5;
+    h.forEach((v,i)=>{const px=(i/(MAX_W-1))*W,py=H/2-v*(H/40);i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);});
     ctx.stroke();
   });
 }
 
-// ── Controls ────────────────────────────────────────────────
-async function startRec() {
-  if (!await ensurePerm()) return;
-  recording = true; samples = [];
-  startListener();
-  set('btnS', true); set('btnX', false);
+async function startRec(){
+  if(!await ensurePerm())return;
+  recording=true;samples=[];startListener();
+  set('btnS',true);set('btnX',false);
   document.getElementById('actionRow').classList.remove('visible');
-  document.getElementById('dot').className = 'dot rec';
-  document.getElementById('stxt').textContent = 'Recording…';
+  document.getElementById('dot').className='dot rec';
+  document.getElementById('stxt').textContent='Recording...';
   hideErr();
 }
 
-function stopRec() {
-  recording = false;
-  stopListener();
-  set('btnS', false); set('btnX', true);
-  const ok = samples.length >= NEED;
-  document.getElementById('dot').className = ok ? 'dot ok' : 'dot';
-  if (ok) {
-    document.getElementById('stxt').textContent =
-      `✓ ${samples.length} samples ready — download or predict!`;
+function stopRec(){
+  recording=false;stopListener();
+  set('btnS',false);set('btnX',true);
+  const ok=samples.length>=NEED;
+  document.getElementById('dot').className=ok?'dot ok':'dot';
+  if(ok){
+    document.getElementById('stxt').textContent=`✓ ${samples.length} samples ready!`;
     document.getElementById('actionRow').classList.add('visible');
   } else {
-    document.getElementById('stxt').textContent =
-      `Only ${samples.length} samples — need ${NEED}+. Record longer.`;
+    document.getElementById('stxt').textContent=`Only ${samples.length} samples - need ${NEED}+. Record longer.`;
   }
 }
 
-function set(id, disabled) { document.getElementById(id).disabled = disabled; }
+function set(id,disabled){document.getElementById(id).disabled=disabled;}
 
-// ── Download CSV ─────────────────────────────────────────────
-function downloadCSV() {
-  if (samples.length < NEED) { showErr('Not enough data.'); return; }
-  let csv = 'timestamp,x,y,z\\n';
-  const t0 = Date.now() - samples.length * 16;
-  samples.forEach((s,i) => {
-    csv += `${t0 + i*16},${s[0].toFixed(4)},${s[1].toFixed(4)},${s[2].toFixed(4)}\\n`;
-  });
-  const a = document.createElement('a');
-  a.href = 'data:text/csv,' + encodeURIComponent(csv);
-  a.download = 'recording.csv';
-  a.click();
+function downloadCSV(){
+  if(samples.length<NEED){showErr('Not enough data.');return;}
+  let csv='timestamp,x,y,z\\n';
+  const t0=Date.now()-samples.length*16;
+  samples.forEach((s,i)=>{csv+=`${t0+i*16},${s[0].toFixed(4)},${s[1].toFixed(4)},${s[2].toFixed(4)}\\n`;});
+  const a=document.createElement('a');
+  a.href='data:text/csv,'+encodeURIComponent(csv);a.download='recording.csv';a.click();
 }
 
-// ── Use This Recording → inject into Streamlit textarea in parent DOM ──
-function sendPredict() {
-  if (samples.length < NEED) { showErr('Not enough data.'); return; }
-  const json = JSON.stringify(samples);
-
-  // Find the hidden textarea Streamlit renders for key="accel_bridge"
-  // It lives in the parent document (outside this iframe)
-  try {
-    const parentDoc = window.parent.document;
-    // Streamlit renders textareas; find ours by aria-label or data-testid fallback
-    const areas = parentDoc.querySelectorAll('textarea');
-    let target = null;
-    for (const a of areas) {
-      if (a.getAttribute('aria-label') === 'accel_bridge' ||
-          a.closest('[data-testid="stTextArea"]')?.querySelector('label')?.textContent?.trim() === 'accel_bridge') {
-        target = a; break;
-      }
-    }
-    if (!target) {
-      // fallback: any hidden textarea with placeholder matching our sentinel
-      for (const a of areas) {
-        if (a.placeholder === '__ACCEL_BRIDGE__') { target = a; break; }
-      }
-    }
-    if (target) {
-      // React controlled input: need nativeInputValueSetter
-      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-        window.parent.HTMLTextAreaElement.prototype, 'value').set;
-      nativeInputValueSetter.call(target, json);
-      target.dispatchEvent(new Event('input', { bubbles: true }));
-      target.dispatchEvent(new Event('change', { bubbles: true }));
-      document.getElementById('stxt').textContent = '✅ Sent! Click "Predict from Recording" above.';
-    } else {
-      showErr('Bridge not ready — try again in a moment.');
-    }
-  } catch(e) {
-    showErr('Cross-frame error: ' + e.message);
-  }
+function sendPredict(){
+  if(samples.length<NEED){showErr('Not enough data.');return;}
+  const compact=samples.map(s=>[+(s[0].toFixed(3)),+(s[1].toFixed(3)),+(s[2].toFixed(3))]);
+  const b64=btoa(JSON.stringify(compact));
+  const url=new URL(window.parent.location.href);
+  url.searchParams.set('d',b64);
+  window.parent.location.href=url.toString();
 }
 
-// ── Helpers ──────────────────────────────────────────────────
-function showErr(m) {
-  const e=document.getElementById('err'); e.textContent='⚠ '+m; e.style.display='block';
-}
-function hideErr() { document.getElementById('err').style.display='none'; }
-
+function showErr(m){const e=document.getElementById('err');e.textContent='\u26a0 '+m;e.style.display='block';}
+function hideErr(){document.getElementById('err').style.display='none';}
 drawWave();
 </script>
 </body>
 </html>
 """
 
-    # ── Render the accelerometer iframe ──────────────────────────────────────
     components.html(accel_html, height=460, scrolling=False)
 
     st.markdown("---")
 
-    # ── Bridge textarea: the iframe JS injects JSON samples here ─────────────
-    # Labelled "accel_bridge" so the JS can find it by aria-label in the parent DOM.
-    bridge_val = st.text_area(
-        "accel_bridge",
-        key="accel_bridge",
-        placeholder="__ACCEL_BRIDGE__",
-        label_visibility="collapsed",
-        height=68,
-    )
-
-    # ── Primary predict button (reads from bridge or session_state) ───────────
-    col_pred, col_clear = st.columns([3, 1])
-    with col_pred:
-        predict_clicked = st.button(
-            "🔮 Predict from Recording", key="btn_bridge_predict", use_container_width=True
-        )
-    with col_clear:
-        if st.button("✕ Clear", key="btn_clear", use_container_width=True):
-            st.session_state["accel_bridge"] = ""
-            st.rerun()
-
-    raw_bridge = (bridge_val or "").strip()
-    if predict_clicked and raw_bridge:
-        try:
-            parsed = json.loads(raw_bridge)
-            # Accepts [[x,y,z],...] directly
-            samples_bridge = []
-            for item in parsed:
-                if isinstance(item, list) and len(item) >= 3:
-                    samples_bridge.append([float(item[0]), float(item[1]), float(item[2])])
-            if len(samples_bridge) < WINDOW_SIZE:
-                st.warning(f"Only {len(samples_bridge)} samples received — record for longer.")
-            else:
-                window       = samples_bridge[-WINDOW_SIZE:]
-                feats        = extract_features(window)
-                feats_scaled = scaler.transform(feats)
-                pred         = int(model.predict(feats_scaled)[0])
-                proba        = model.predict_proba(feats_scaled)[0]
-                color        = LABEL_COLORS[pred]
-                st.markdown(f"""
+    # ── Show prediction if samples arrived via ?d= param ─────────────────────
+    live_samples = st.session_state.get("live_samples")
+    if live_samples:
+        st.session_state.pop("live_samples")
+        window_s     = live_samples[-WINDOW_SIZE:]
+        feats        = extract_features(window_s)
+        feats_scaled = scaler.transform(feats)
+        pred         = int(model.predict(feats_scaled)[0])
+        proba        = model.predict_proba(feats_scaled)[0]
+        color        = LABEL_COLORS[pred]
+        st.markdown(f"""
 <div class="result-box" style="border-color:{color}">
   <div class="result-emoji">{LABEL_NAMES[pred].split()[-1]}</div>
   <div class="result-name">{LABEL_NAMES[pred]}</div>
   <div class="result-desc">{LABEL_DESCS[pred]}</div>
 </div>""", unsafe_allow_html=True)
-                st.markdown("#### Confidence")
-                for name, p in zip(LABEL_NAMES.values(), proba):
-                    c1, c2 = st.columns([3, 1])
-                    c1.progress(float(p), text=name)
-                    c2.markdown(f"**{p*100:.1f}%**")
-        except Exception as e:
-            st.error(f"Could not parse recording data: {e}")
-    elif predict_clicked and not raw_bridge:
-        st.warning("No recording received yet — press **Use This Recording** in the recorder first.")
+        st.markdown("#### Confidence")
+        for name, p in zip(LABEL_NAMES.values(), proba):
+            c1, c2 = st.columns([3, 1])
+            c1.progress(float(p), text=name)
+            c2.markdown(f"**{p*100:.1f}%**")
 
-    # ── Manual paste fallback (collapsed by default) ──────────────────────────
-    with st.expander("✏️ Paste data manually (fallback)"):
+    # ── Manual paste fallback ─────────────────────────────────────────────────
+    with st.expander("\u270f\ufe0f Paste data manually (fallback)"):
         st.caption("Paste a JSON array `[[x,y,z], ...]` or CSV rows `x,y,z` / `timestamp,x,y,z`")
-
-        raw_json = st.text_area(
-            "Recorded samples",
-            height=100,
-            placeholder='[[-1.2, -9.5, -0.3], [-1.1, -9.6, -0.2], ...]',
-            key="live_paste"
-        )
-
-        if st.button("🔮 Predict from pasted data", key="btn_live_predict", use_container_width=True):
-            samples = []
+        raw_json = st.text_area("Recorded samples", height=100,
+            placeholder='[[-1.2, -9.5, -0.3], [-1.1, -9.6, -0.2], ...]', key="live_paste")
+        if st.button("\U0001f52e Predict from pasted data", key="btn_live_predict", use_container_width=True):
+            samples_p = []
             raw = raw_json.strip()
             if not raw:
                 st.warning("Paste your recorded data first.")
             else:
                 try:
                     if raw.startswith('['):
-                        parsed = json.loads(raw)
-                        for item in parsed:
+                        for item in json.loads(raw):
                             if isinstance(item, list) and len(item) >= 3:
-                                samples.append([float(item[0]), float(item[1]), float(item[2])])
-                            elif isinstance(item, dict):
-                                samples.append([float(item['x']), float(item['y']), float(item['z'])])
+                                samples_p.append([float(item[0]), float(item[1]), float(item[2])])
                     else:
                         for line in raw.splitlines():
                             parts = [float(v) for v in line.split(',')]
-                            if len(parts) == 3:
-                                samples.append(parts)
-                            elif len(parts) == 4:
-                                samples.append(parts[1:])
+                            if len(parts) == 3:   samples_p.append(parts)
+                            elif len(parts) == 4: samples_p.append(parts[1:])
                 except Exception as e:
                     st.error(f"Parse error: {e}")
-                    samples = []
-
-                if samples and len(samples) < WINDOW_SIZE:
-                    st.warning(f"Need at least {WINDOW_SIZE} samples, got {len(samples)}. Record longer.")
-                elif samples:
-                    window       = samples[-WINDOW_SIZE:]
-                    feats        = extract_features(window)
+                if samples_p and len(samples_p) < WINDOW_SIZE:
+                    st.warning(f"Need at least {WINDOW_SIZE} samples, got {len(samples_p)}.")
+                elif samples_p:
+                    window_s     = samples_p[-WINDOW_SIZE:]
+                    feats        = extract_features(window_s)
                     feats_scaled = scaler.transform(feats)
                     pred         = int(model.predict(feats_scaled)[0])
                     proba        = model.predict_proba(feats_scaled)[0]
-
-                    color = LABEL_COLORS[pred]
+                    color        = LABEL_COLORS[pred]
                     st.markdown(f"""
 <div class="result-box" style="border-color:{color}">
   <div class="result-emoji">{LABEL_NAMES[pred].split()[-1]}</div>
   <div class="result-name">{LABEL_NAMES[pred]}</div>
   <div class="result-desc">{LABEL_DESCS[pred]}</div>
 </div>""", unsafe_allow_html=True)
-
                     st.markdown("#### Confidence")
                     for name, p in zip(LABEL_NAMES.values(), proba):
                         c1, c2 = st.columns([3, 1])
@@ -521,16 +365,13 @@ drawWave();
 
     st.markdown("""
 <div class="instr-card" style="margin-top:1rem">
-⚠️ <b>iOS users:</b> The accelerometer requires HTTPS + a permission prompt.<br>
-Streamlit Cloud provides HTTPS automatically — it will just work when deployed.<br>
+\u26a0\ufe0f <b>iOS users:</b> The accelerometer requires HTTPS + a permission prompt.<br>
+Streamlit Cloud provides HTTPS automatically.<br>
 For local testing on your phone, run: <code>npx ngrok http 8501</code> and open the ngrok URL.
 </div>
 """, unsafe_allow_html=True)
 
 
-# ════════════════════════════════════════════════════════════════
-# TAB 2 — Upload CSV
-# ════════════════════════════════════════════════════════════════
 with tab2:
     uploaded = st.file_uploader(
         "Upload accelerometer CSV (columns: timestamp, x, y, z)",
