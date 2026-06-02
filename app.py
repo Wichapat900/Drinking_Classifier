@@ -27,7 +27,7 @@ LABEL_DESCS  = {
     2: "Dynamic high-range tilting detected — lots of acceleration variance. You're chugging from a bottle!",
 }
 
-# ── Movement Detector (MOVED INSIDE APP.PY TO FIX CACHING) ────
+# ── Movement Detector ─────────────────────────────────────────
 def detect_segments(df: pd.DataFrame, hz_est: int, threshold: float = 0.15, min_window: int = 60) -> list:
     segments = []
     
@@ -140,7 +140,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 if model is None:
-    st.error("⚠️ **model.pkl / scaler.pkl not found.** Run `train_model.py` first, then push the .pkl files to your repo.")
+    st.error("⚠️ **model.pkl / scaler.pkl not found.**")
     st.stop()
 
 # ── Tabs ──────────────────────────────────────────────────────
@@ -318,22 +318,12 @@ with tab4:
     })
     st.dataframe(stats_df, use_container_width=True, hide_index=True)
 
-    st.markdown("""
-<div class="instr-card">
-<b>Top features by Random Forest importance:</b><br>
-1. <b>Z-axis max/mean</b> — Coffee tilts forward (Z ≈ −3), others near 0<br>
-2. <b>Y-axis std/range</b> — Smoothie is very vertical and stable (Y ≈ −9)<br>
-3. <b>Magnitude range</b> — Water bottle has the most dynamic, shaky motion<br>
-4. <b>Jerk std</b> — Water shows sudden pickup/putdown acceleration bursts
-</div>
-""", unsafe_allow_html=True)
-
 # ════════════════════════════════════════════════════════════════
-# TAB 3 — Auto-Classify Timeline (EVENT-BASED CHUNKING)
+# TAB 3 — Auto-Classify Timeline
 # ════════════════════════════════════════════════════════════════
 with tab3:
     st.markdown("#### 🔬 Auto-classify by Activity Segments")
-    st.caption("Upload a CSV. The system will automatically cut out the active parts and predict each chunk.")
+    st.caption("Upload a CSV. The system will automatically cut out the active parts and physically graph/predict each isolated chunk.")
 
     label_file = st.file_uploader(
         "Upload merged CSV (timestamp, x, y, z)", type=["csv"], key="label_upload"
@@ -371,7 +361,7 @@ with tab3:
 
         total_sec = float(ldf['seconds'].iloc[-1])
         
-        # Robust Hz calculation that ignores big empty gaps
+        # Robust Hz calculation
         diffs = ldf['seconds'].diff().dropna()
         normal_diffs = diffs[diffs < 1.0]
         if len(normal_diffs) > 0 and normal_diffs.median() > 0:
@@ -382,26 +372,27 @@ with tab3:
 
         st.success(f"✓ {n_rows:,} rows · Total Time Span: {total_sec:.1f} s · Detected ~{hz_est} Hz Sampling Rate")
 
-        # Full waveform plot
+        # Top graph: The full raw timeline
+        st.markdown("##### 1. Full Timeline View (Raw Data)")
         plot_df = ldf[['x','y','z']].copy()
         plot_df.index = ldf['seconds']
         st.line_chart(plot_df, use_container_width=True, height=200)
-
+        
         st.markdown("---")
+        st.markdown("##### 2. Isolated Segments & Predictions")
 
-        # Use the built-in function to get segments
+        # Get segments
         segments = detect_segments(ldf, hz_est=hz_est, threshold=0.15, min_window=WINDOW_SIZE)
 
-        # Predict on each isolated segment
         results = []
         xyz = ldf[['x','y','z']].values
-        
         ldf['label'] = 'Idle 😴'  
         ldf['confidence'] = 0.0
 
         if not segments:
             st.info("No clear drinking activity detected! Try lowering the threshold in `detect_segments` if your movements are very gentle.")
         else:
+            # 💡 THIS IS THE NEW PART: Render each cut graph individually
             for i, (s_idx, e_idx) in enumerate(segments):
                 segment_data = xyz[s_idx : e_idx + 1].tolist()
                 
@@ -415,9 +406,28 @@ with tab3:
                 
                 start_dt = ldf['datetime'].iloc[s_idx]
                 end_dt   = ldf['datetime'].iloc[e_idx]
-                
                 duration_sec = float(ldf['seconds'].iloc[e_idx] - ldf['seconds'].iloc[s_idx])
                 
+                # Split emoji and name for pretty UI
+                try:
+                    emoji = label.split()[0]
+                    name  = ' '.join(label.split()[1:])
+                except IndexError:
+                    emoji = "✨"
+                    name  = label
+                
+                # Render the UI for THIS specific segment
+                st.markdown(f"### {emoji} **{name}** (Action {i+1})")
+                st.caption(f"**Confidence:** {conf_pct:.1f}% &nbsp;|&nbsp; **Duration:** {duration_sec:.1f}s &nbsp;|&nbsp; **Time:** {start_dt.strftime('%H:%M:%S')} to {end_dt.strftime('%H:%M:%S')}")
+                
+                # Physically "cut out" the dataframe and graph just this block
+                cut_df = ldf.iloc[s_idx : e_idx + 1][['x', 'y', 'z']].copy()
+                cut_df.index = ldf['seconds'].iloc[s_idx : e_idx + 1]
+                st.line_chart(cut_df, use_container_width=True, height=180)
+                
+                st.write("") # Little bit of spacing
+                
+                # Save to our table array
                 results.append({
                     'Segment':     f"Action {i+1}",
                     'Activity':    label,
@@ -430,25 +440,9 @@ with tab3:
                 ldf.loc[s_idx:e_idx, 'label'] = label
                 ldf.loc[s_idx:e_idx, 'confidence'] = conf_pct
 
-            res_df = pd.DataFrame(results)
-
-            st.markdown("#### 📋 Detected Activities")
-            for _, row in res_df.iterrows():
-                try:
-                    emoji = row['Activity'].split()[0]
-                    name  = ' '.join(row['Activity'].split()[1:])
-                except IndexError:
-                    emoji = "✨"
-                    name  = row['Activity']
-                    
-                st.markdown(
-                    f"**{row['Segment']}** &nbsp;→&nbsp; {emoji} **{name}** &nbsp;·&nbsp; "
-                    f"*{row['Start time']} to {row['End time']}* &nbsp;·&nbsp; "
-                    f"Duration: {row['Duration']} &nbsp;·&nbsp; Conf: {row['Confidence']}"
-                )
-
             st.markdown("---")
-            st.markdown("#### Segment Details Table")
+            st.markdown("#### Segment Summary Table")
+            res_df = pd.DataFrame(results)
             st.dataframe(res_df, use_container_width=True, hide_index=True)
 
         out_df = ldf.copy()
