@@ -135,141 +135,150 @@ with tab1:
 
     accel_html = """
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0d0d14; color: white; padding: 16px; min-height: 340px; }
-  .axes { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 14px; }
-  .axis-box { background: rgba(255,255,255,0.07); border-radius: 12px; padding: 10px; text-align: center; }
-  .axis-label { font-size: 0.7rem; opacity: 0.55; margin-bottom: 3px; }
-  .axis-val { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .ax { color: #ff6b6b; } .ay { color: #51cf66; } .az { color: #339af0; }
-  canvas { width: 100%; height: 80px; display: block; background: rgba(0,0,0,0.4); border-radius: 10px; margin-bottom: 12px; }
-  .status { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; color: #aaa; margin-bottom: 12px; background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px 12px; }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: #444; flex-shrink: 0; }
-  .dot.rec { background: #ff4444; animation: blink 1s infinite; }
-  .dot.ok  { background: #51cf66; }
-  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
-  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
-  .action-row { display: none; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
-  .action-row.visible { display: grid; }
-  .btn { padding: 13px; border: none; border-radius: 12px; font-size: 0.95rem; font-weight: 700; cursor: pointer; transition: all 0.15s; }
-  .btn:active { transform: scale(0.96); }
-  .btn-rec  { background: linear-gradient(135deg,#11998e,#38ef7d); color: #0a1f1a; }
-  .btn-stop { background: linear-gradient(135deg,#f7971e,#ffd200); color: #1a1000; }
-  .btn-dl   { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18); color: #ccc; }
-  .btn-dl:hover { background: rgba(255,255,255,0.14); }
-  .btn-use  { background: linear-gradient(135deg,#f953c6,#b91d73); color: white; }
-  .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
-  .hint { font-size: 0.78rem; color: #555; text-align: center; margin-top: 8px; line-height: 1.5; }
-  .err  { background: rgba(255,70,70,0.15); border: 1px solid #ff4444; border-radius: 8px; padding: 10px; font-size: 0.82rem; margin-top: 8px; display:none; }
+body {
+    font-family: Arial;
+    background: #0d0d14;
+    text-align: center;
+    padding: 20px;
+    margin: 0;
+}
+.container {
+    background: #1a1a2e;
+    max-width: 350px;
+    margin: auto;
+    padding: 20px;
+    border-radius: 20px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.4);
+}
+h1 { color: white; margin-bottom: 10px; }
+.value {
+    font-size: 28px;
+    margin: 10px;
+    color: white;
+}
+.value span { color: white; font-weight: bold; }
+button {
+    width: 90%;
+    padding: 15px;
+    margin: 6px auto;
+    display: block;
+    border: none;
+    border-radius: 12px;
+    font-size: 18px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+button:active { opacity: 0.75; }
+.start    { background: #4CAF50; color: white; }
+.stop     { background: #f44336; color: white; }
+.download { background: #2196F3; color: white; }
+.info {
+    margin-top: 15px;
+    font-size: 18px;
+    color: white;
+}
+.status {
+    margin: 10px 0;
+    font-size: 14px;
+    color: #aaa;
+    min-height: 20px;
+}
 </style>
 </head>
 <body>
-<div class="axes">
-  <div class="axis-box"><div class="axis-label">X</div><div class="axis-val ax" id="vx">0.00</div></div>
-  <div class="axis-box"><div class="axis-label">Y</div><div class="axis-val ay" id="vy">0.00</div></div>
-  <div class="axis-box"><div class="axis-label">Z</div><div class="axis-val az" id="vz">0.00</div></div>
+<div class="container">
+    <h1>📱 Motion Logger</h1>
+    <div class="value">X: <span id="x">0</span></div>
+    <div class="value">Y: <span id="y">0</span></div>
+    <div class="value">Z: <span id="z">0</span></div>
+    <div class="info">Sampling Rate: <span id="hz">0</span> Hz</div>
+    <div class="status" id="status">Press Start Recording to begin</div>
+    <button class="start"    onclick="startSensor()">Start Recording</button>
+    <button class="stop"     onclick="stopRecording()">Stop Recording</button>
+    <button class="download" onclick="downloadCSV()">Download CSV</button>
 </div>
-<canvas id="cv" width="460" height="80"></canvas>
-<div class="status"><div class="dot" id="dot"></div><span id="stxt">Press Start to begin</span></div>
-<div class="btns">
-  <button class="btn btn-rec"  id="btnS" onclick="startRec()">&#9654; Start</button>
-  <button class="btn btn-stop" id="btnX" onclick="stopRec()" disabled>&#9209; Stop</button>
-</div>
-<div class="action-row" id="actionRow">
-  <button class="btn btn-use" onclick="downloadCSV()" style="grid-column:span 2">&#11015; Download CSV &amp; Predict in Tab 2</button>
-</div>
-<p class="hint">Record for 5-10 seconds, then download the CSV and upload it in the <b>Upload CSV</b> tab to predict</p>
-<div class="err" id="err"></div>
 <script>
-const NEED=60;
-let recording=false,samples=[],hasPerm=false,lx=0,ly=0,lz=0;
-const wave={x:[],y:[],z:[]},MAX_W=220;
-const canvas=document.getElementById('cv'),ctx=canvas.getContext('2d');
+let recording = false;
+let sensorData = [];
+let sampleCount = 0;
+let startTime = 0;
 
-async function ensurePerm(){
-  if(hasPerm)return true;
-  if(typeof DeviceMotionEvent==='undefined'){showErr('DeviceMotionEvent not available.');return false;}
-  if(typeof DeviceMotionEvent.requestPermission==='function'){
-    try{const r=await DeviceMotionEvent.requestPermission();if(r!=='granted'){showErr('Permission denied.');return false;}}
-    catch(e){showErr('Permission error: '+e.message);return false;}
-  }
-  hasPerm=true;return true;
-}
-function startListener(){window.addEventListener('devicemotion',onMotion);}
-function stopListener(){window.removeEventListener('devicemotion',onMotion);}
-
-function onMotion(e){
-  const a=e.accelerationIncludingGravity;if(!a)return;
-  lx=a.x??0;ly=a.y??0;lz=a.z??0;
-  document.getElementById('vx').textContent=lx.toFixed(2);
-  document.getElementById('vy').textContent=ly.toFixed(2);
-  document.getElementById('vz').textContent=lz.toFixed(2);
-  if(recording){
-    samples.push([lx,ly,lz]);
-    document.getElementById('stxt').textContent=`Recording... ${samples.length} samples (${(samples.length/60).toFixed(1)}s)`;
-  }
-  ['x','y','z'].forEach((ax,i)=>{const v=[lx,ly,lz][i];wave[ax].push(v);if(wave[ax].length>MAX_W)wave[ax].shift();});
-  drawWave();
+function startSensor() {
+    sensorData = [];
+    sampleCount = 0;
+    startTime = Date.now();
+    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+        DeviceMotionEvent.requestPermission()
+            .then(permissionState => {
+                if (permissionState === 'granted') { startListening(); }
+            })
+            .catch(console.error);
+    } else {
+        startListening();
+    }
 }
 
-function drawWave(){
-  const W=canvas.width,H=canvas.height;ctx.clearRect(0,0,W,H);
-  const colors={x:'#ff6b6b',y:'#51cf66',z:'#339af0'};
-  ['x','y','z'].forEach(ax=>{
-    const h=wave[ax];if(h.length<2)return;
-    ctx.beginPath();ctx.strokeStyle=colors[ax];ctx.lineWidth=1.5;
-    h.forEach((v,i)=>{const px=(i/(MAX_W-1))*W,py=H/2-v*(H/40);i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);});
-    ctx.stroke();
-  });
+function startListening() {
+    recording = true;
+    window.addEventListener('devicemotion', handleMotion);
+    document.getElementById('status').textContent = 'Recording...';
+    document.getElementById('status').style.color = '#ff4444';
 }
 
-async function startRec(){
-  if(!await ensurePerm())return;
-  recording=true;samples=[];startListener();
-  set('btnS',true);set('btnX',false);
-  document.getElementById('actionRow').classList.remove('visible');
-  document.getElementById('dot').className='dot rec';
-  document.getElementById('stxt').textContent='Recording...';
-  hideErr();
+function handleMotion(event) {
+    if (!recording) return;
+    let x = event.accelerationIncludingGravity.x || 0;
+    let y = event.accelerationIncludingGravity.y || 0;
+    let z = event.accelerationIncludingGravity.z || 0;
+    document.getElementById('x').innerHTML = x.toFixed(2);
+    document.getElementById('y').innerHTML = y.toFixed(2);
+    document.getElementById('z').innerHTML = z.toFixed(2);
+    let timestamp = Date.now();
+    sensorData.push([timestamp, x, y, z]);
+    sampleCount++;
+    document.getElementById('status').textContent = `Recording... ${sampleCount} samples`;
 }
 
-function stopRec(){
-  recording=false;stopListener();
-  set('btnS',false);set('btnX',true);
-  const ok=samples.length>=NEED;
-  document.getElementById('dot').className=ok?'dot ok':'dot';
-  if(ok){
-    document.getElementById('stxt').textContent=`✓ ${samples.length} samples ready!`;
-    document.getElementById('actionRow').classList.add('visible');
-  } else {
-    document.getElementById('stxt').textContent=`Only ${samples.length} samples - need ${NEED}+. Record longer.`;
-  }
+function stopRecording() {
+    recording = false;
+    window.removeEventListener('devicemotion', handleMotion);
+    let duration = (Date.now() - startTime) / 1000;
+    let hz = sampleCount / duration;
+    document.getElementById('hz').innerHTML = hz.toFixed(2);
+    document.getElementById('status').style.color = '#51cf66';
+    document.getElementById('status').textContent =
+        `Done! ${sampleCount} samples @ ${hz.toFixed(1)} Hz — press Download CSV`;
 }
 
-function set(id,disabled){document.getElementById(id).disabled=disabled;}
-
-function downloadCSV(){
-  if(samples.length<NEED){showErr('Not enough data.');return;}
-  let csv='timestamp,x,y,z\\n';
-  const t0=Date.now()-samples.length*16;
-  samples.forEach((s,i)=>{csv+=`${t0+i*16},${s[0].toFixed(4)},${s[1].toFixed(4)},${s[2].toFixed(4)}\\n`;});
-  const a=document.createElement('a');
-  a.href='data:text/csv,'+encodeURIComponent(csv);a.download='recording.csv';a.click();
+function downloadCSV() {
+    if (sensorData.length === 0) {
+        document.getElementById('status').style.color = '#f44336';
+        document.getElementById('status').textContent = 'No data yet — record first!';
+        return;
+    }
+    let csv = 'timestamp,x,y,z\\n';
+    sensorData.forEach(row => { csv += row.join(',') + '\\n'; });
+    let blob = new Blob([csv], { type: 'text/csv' });
+    let url = window.URL.createObjectURL(blob);
+    let a = document.createElement('a');
+    a.href = url;
+    a.download = 'accelerometer_data.csv';
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.getElementById('status').textContent = 'CSV downloaded! Upload it in the Upload CSV tab.';
 }
-
-function showErr(m){const e=document.getElementById('err');e.textContent='\u26a0 '+m;e.style.display='block';}
-function hideErr(){document.getElementById('err').style.display='none';}
-drawWave();
 </script>
 </body>
 </html>
 """
 
-    components.html(accel_html, height=440, scrolling=False)
+    components.html(accel_html, height=480, scrolling=False)
 
     st.markdown("""
 <div class="instr-card" style="margin-top:1rem">
