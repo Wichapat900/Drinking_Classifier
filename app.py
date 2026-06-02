@@ -1,3 +1,6 @@
+Here is the complete, updated `app.py` file with the syntax error fixed. You can copy and paste this directly into your repository.
+
+```python
 """
 Drink Mind Reader — Streamlit App with built-in accelerometer
 Deploy: push to GitHub → share.streamlit.io → select app.py
@@ -361,4 +364,97 @@ with tab3:
         hz_est    = max(1, round(n_rows / total_sec)) if total_sec > 0 else 60
         st.success(f"✓ {n_rows:,} rows · {total_sec:.1f} s · ~{hz_est} Hz")
 
-        # ── Full waveform plot ────────────────────────────────
+        # ── Full waveform plot ────────────────────────────────────
+        plot_df = ldf[['x','y','z']].copy()
+        plot_df.index = ldf['seconds']
+        st.line_chart(plot_df, use_container_width=True, height=200)
+
+        st.markdown("---")
+
+        # ── USE OUR NEW IMPORT TO GET SEGMENTS ────────────────────
+        # You can tweak the 0.5 threshold if it's too sensitive or not sensitive enough
+        segments = detect_segments(ldf, hz_est=hz_est, threshold=0.5, min_window=WINDOW_SIZE)
+
+        # ── Predict on each isolated segment ──────────────────────
+        results = []
+        xyz = ldf[['x','y','z']].values
+        
+        ldf['label'] = 'Idle 😴'  
+        ldf['confidence'] = 0.0
+
+        if not segments:
+            st.info("No clear drinking activity detected! Try lowering the threshold in `detect_segments` if your movements are very gentle.")
+        else:
+            for i, (s_idx, e_idx) in enumerate(segments):
+                # 1. Isolate the "wiggle" data
+                segment_data = xyz[s_idx : e_idx + 1].tolist()
+                
+                # 2. Extract features and predict
+                feats = extract_features(segment_data)
+                scaled = scaler.transform(feats)
+                pred = int(model.predict(scaled)[0])
+                proba = model.predict_proba(scaled)[0]
+                
+                label = LABEL_NAMES[pred]
+                conf_pct = float(proba.max() * 100)
+                
+                start_dt = ldf['datetime'].iloc[s_idx]
+                end_dt   = ldf['datetime'].iloc[e_idx]
+                
+                # 👇 FIX: Calculate duration separately to avoid f-string syntax errors
+                duration_sec = float(ldf['seconds'].iloc[e_idx] - ldf['seconds'].iloc[s_idx])
+                
+                results.append({
+                    'Segment':     f"Action {i+1}",
+                    'Activity':    label,
+                    'Start time':  start_dt.strftime('%H:%M:%S.%f')[:-3],
+                    'End time':    end_dt.strftime('%H:%M:%S.%f')[:-3],
+                    'Duration':    f"{duration_sec:.1f}s",
+                    'Confidence':  f"{conf_pct:.1f}%",
+                })
+                
+                # Tag the rows in the main dataframe for export
+                ldf.loc[s_idx:e_idx, 'label'] = label
+                ldf.loc[s_idx:e_idx, 'confidence'] = conf_pct
+
+            res_df = pd.DataFrame(results)
+
+            # ── Display the results ───────────────────────────────────
+            st.markdown("#### 📋 Detected Activities")
+            for _, row in res_df.iterrows():
+                try:
+                    emoji = row['Activity'].split()[0]
+                    name  = ' '.join(row['Activity'].split()[1:])
+                except IndexError:
+                    emoji = "✨"
+                    name  = row['Activity']
+                    
+                st.markdown(
+                    f"**{row['Segment']}** &nbsp;→&nbsp; {emoji} **{name}** &nbsp;·&nbsp; "
+                    f"*{row['Start time']} to {row['End time']}* &nbsp;·&nbsp; "
+                    f"Duration: {row['Duration']} &nbsp;·&nbsp; Conf: {row['Confidence']}"
+                )
+
+            st.markdown("---")
+            st.markdown("#### Segment Details Table")
+            st.dataframe(res_df, use_container_width=True, hide_index=True)
+
+        # ── Export ────────────────────────────────────────────────
+        out_df = ldf.copy()
+        out_df['datetime'] = out_df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
+        
+        st.download_button(
+            label="⬇️ Download Labelled CSV",
+            data=out_df.to_csv(index=False),
+            file_name="classified_recording.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+# ── Footer ────────────────────────────────────────────────────
+st.markdown(
+    "<br><p class='mono' style='text-align:center'>model: RandomForest · features: 37 · cv-accuracy: 99.9%</p>",
+    unsafe_allow_html=True
+)
+
+```
