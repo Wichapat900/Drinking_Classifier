@@ -298,7 +298,17 @@ with tab2:
 
     if uploaded:
         try:
-            df = pd.read_csv(uploaded)
+            raw = uploaded.read()
+            df = None
+            for enc in ['utf-8', 'utf-16', 'cp1252', 'latin-1']:
+                try:
+                    df = pd.read_csv(pd.io.common.BytesIO(raw), encoding=enc)
+                    break
+                except Exception:
+                    continue
+            if df is None:
+                st.error("Could not read the CSV file.")
+                st.stop()
             if not {'x','y','z'}.issubset(df.columns):
                 st.error(f"CSV must have x, y, z columns. Found: {list(df.columns)}")
             else:
@@ -366,13 +376,17 @@ with tab3:
 
     if label_file:
         # ── Load with auto-detected encoding ─────────────────────
-        import chardet as _chardet
         raw_bytes = label_file.read()
-        enc = (_chardet.detect(raw_bytes).get('encoding') or 'utf-8')
-        try:
-            ldf = pd.read_csv(pd.io.common.BytesIO(raw_bytes), encoding=enc)
-        except Exception:
-            ldf = pd.read_csv(pd.io.common.BytesIO(raw_bytes), encoding='latin-1')
+        ldf = None
+        for enc in ['utf-8', 'utf-16', 'cp1252', 'latin-1']:
+            try:
+                ldf = pd.read_csv(pd.io.common.BytesIO(raw_bytes), encoding=enc)
+                break
+            except Exception:
+                continue
+        if ldf is None:
+            st.error("Could not read the CSV file.")
+            st.stop()
 
         if not {'x','y','z'}.issubset(ldf.columns):
             st.error(f"Need x, y, z columns. Found: {list(ldf.columns)}")
