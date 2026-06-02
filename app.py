@@ -264,13 +264,13 @@ function downloadCSV() {
     }
     let csv = 'timestamp,x,y,z\\n';
     sensorData.forEach(row => { csv += row.join(',') + '\\n'; });
-    let blob = new Blob([csv], { type: 'text/csv' });
-    let url = window.URL.createObjectURL(blob);
     let a = document.createElement('a');
-    a.href = url;
+    a.href = 'data:text/csv,' + encodeURIComponent(csv);
     a.download = 'accelerometer_data.csv';
+    document.body.appendChild(a);
     a.click();
-    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+    document.getElementById('status').style.color = '#51cf66';
     document.getElementById('status').textContent = 'CSV downloaded! Upload it in the Upload CSV tab.';
 }
 </script>
