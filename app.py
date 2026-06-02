@@ -375,7 +375,8 @@ with tab3:
         # Top graph: The full raw timeline
         st.markdown("##### 1. Full Timeline View (Raw Data)")
         plot_df = ldf[['x','y','z']].copy()
-        plot_df.index = ldf['seconds']
+        # 💡 UPDATE: Index set to datetime so Streamlit formats the X-axis as real time
+        plot_df.index = ldf['datetime']
         st.line_chart(plot_df, use_container_width=True, height=200)
         
         st.markdown("---")
@@ -392,7 +393,6 @@ with tab3:
         if not segments:
             st.info("No clear drinking activity detected! Try lowering the threshold in `detect_segments` if your movements are very gentle.")
         else:
-            # 💡 THIS IS THE NEW PART: Render each cut graph individually
             for i, (s_idx, e_idx) in enumerate(segments):
                 segment_data = xyz[s_idx : e_idx + 1].tolist()
                 
@@ -422,7 +422,8 @@ with tab3:
                 
                 # Physically "cut out" the dataframe and graph just this block
                 cut_df = ldf.iloc[s_idx : e_idx + 1][['x', 'y', 'z']].copy()
-                cut_df.index = ldf['seconds'].iloc[s_idx : e_idx + 1]
+                # 💡 UPDATE: Set the index for the individual cuts to datetime as well
+                cut_df.index = ldf['datetime'].iloc[s_idx : e_idx + 1]
                 st.line_chart(cut_df, use_container_width=True, height=180)
                 
                 st.write("") # Little bit of spacing
