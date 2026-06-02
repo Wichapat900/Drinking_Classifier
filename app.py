@@ -1,6 +1,3 @@
-Here is the complete, updated `app.py` file with the syntax error fixed. You can copy and paste this directly into your repository.
-
-```python
 """
 Drink Mind Reader — Streamlit App with built-in accelerometer
 Deploy: push to GitHub → share.streamlit.io → select app.py
@@ -456,5 +453,3 @@ st.markdown(
     "<br><p class='mono' style='text-align:center'>model: RandomForest · features: 37 · cv-accuracy: 99.9%</p>",
     unsafe_allow_html=True
 )
-
-```
