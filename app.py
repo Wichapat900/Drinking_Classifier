@@ -125,7 +125,7 @@ if model is None:
     st.stop()
 
 # ── Tabs ──────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs(["📱 Live Record", "📂 Upload CSV", "🏷️ Label CSV", "📊 Stats"])
+tab1, tab2, tab3, tab4 = st.tabs(["📱 Live Record", "📂 Upload CSV", "🔬 Auto-Classify", "📊 Stats"])
 
 # ════════════════════════════════════════════════════════════════
 # TAB 1 — Built-in accelerometer
@@ -366,145 +366,127 @@ with tab4:
 """, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════
-# TAB 3 — Label CSV
+# TAB 3 — Auto-Classify Timeline
 # ════════════════════════════════════════════════════════════════
 with tab3:
-    st.markdown("#### 🏷️ Label a merged recording")
-    st.caption("Upload your merged CSV, see the full waveform, define which rows belong to each activity, then download a labelled CSV.")
+    st.markdown("#### 🔬 Auto-classify a merged recording")
+    st.caption("Upload a CSV with multiple activities merged together. The model classifies each window automatically and outputs a labelled timeline.")
 
-    label_file = st.file_uploader("Upload merged CSV (timestamp, x, y, z)", type=["csv"], key="label_upload")
+    label_file = st.file_uploader(
+        "Upload merged CSV (timestamp, x, y, z)", type=["csv"], key="label_upload"
+    )
 
     if label_file:
-        # ── Load with auto-detected encoding ─────────────────────
+        # ── Load — try every encoding, latin-1 never fails ────────
         raw_bytes = label_file.read()
         ldf = None
-        for enc in ['utf-8', 'utf-16', 'cp1252', 'latin-1']:
+        for enc in ['utf-8-sig', 'utf-8', 'utf-16', 'utf-16-le', 'utf-16-be', 'cp1252', 'latin-1']:
             try:
                 ldf = pd.read_csv(pd.io.common.BytesIO(raw_bytes), encoding=enc)
-                break
+                if {'x','y','z'}.issubset(ldf.columns):
+                    break
+                ldf = None   # columns wrong, try next
             except Exception:
                 continue
         if ldf is None:
-            st.error("Could not read the CSV file.")
-            st.stop()
-
-        if not {'x','y','z'}.issubset(ldf.columns):
-            st.error(f"Need x, y, z columns. Found: {list(ldf.columns)}")
+            st.error("Could not read the file. Make sure it has x, y, z columns.")
             st.stop()
 
         n_rows = len(ldf)
 
-        # ── Build seconds column from timestamp ───────────────────
+        # ── Seconds column ────────────────────────────────────────
         ts_col = next((c for c in ldf.columns if 'time' in c.lower()), None)
         if ts_col:
-            ts = ldf[ts_col].astype(float)
+            ts = pd.to_numeric(ldf[ts_col], errors='coerce').ffill()
             t0 = ts.iloc[0]
-            t_range = ts.iloc[-1] - t0
-            # millisecond unix timestamps are > 1e9
-            divisor = 1000.0 if t_range > 1_000_000 else 1.0
+            span = ts.iloc[-1] - t0
+            divisor = 1000.0 if span > 1_000_000 else 1.0
             ldf['seconds'] = ((ts - t0) / divisor).round(3)
         else:
             ldf['seconds'] = (np.arange(n_rows) / 60.0).round(3)
 
         total_sec = float(ldf['seconds'].iloc[-1])
-        hz_est = round(n_rows / total_sec) if total_sec > 0 else 60
-
+        hz_est = max(1, round(n_rows / total_sec)) if total_sec > 0 else 60
         st.success(f"✓ {n_rows:,} rows · {total_sec:.1f} s · ~{hz_est} Hz")
 
-        # ── Full waveform (use row index so it always renders cleanly) ─
-        st.markdown("**Full waveform** — use the row numbers below to mark your segments")
+        # ── Full waveform ─────────────────────────────────────────
         plot_df = ldf[['x','y','z']].copy()
-        plot_df.index = ldf['seconds']          # x-axis = seconds
-        st.line_chart(plot_df, use_container_width=True, height=220)
-
-        st.caption(f"X-axis is seconds from start (0 → {total_sec:.1f} s). "
-                   f"Each unit on the slider below = 1 second.")
+        plot_df.index = ldf['seconds']
+        st.line_chart(plot_df, use_container_width=True, height=200)
 
         st.markdown("---")
-        st.markdown("#### Define segments")
 
-        DRINK_OPTIONS = ["☕ Hot Coffee", "🍓 Strawberry Smoothie", "💧 Bottle of Water"]
+        # ── Sliding-window classification ─────────────────────────
+        STEP = WINDOW_SIZE // 2   # 50 % overlap
 
-        # Reset segments if a new file is loaded (different total_sec)
-        if ("label_total_sec" not in st.session_state or
-                abs(st.session_state["label_total_sec"] - total_sec) > 1):
-            third = round(total_sec / 3, 1)
-            st.session_state["label_segments"] = [
-                {"activity": DRINK_OPTIONS[0], "start": 0.0,          "end": third},
-                {"activity": DRINK_OPTIONS[1], "start": third,         "end": third * 2},
-                {"activity": DRINK_OPTIONS[2], "start": third * 2,     "end": total_sec},
-            ]
-            st.session_state["label_total_sec"] = total_sec
+        results = []   # {start_s, end_s, label, proba}
+        xyz = ldf[['x','y','z']].values
 
-        segs = st.session_state["label_segments"]
-
-        # ── Segment editor ────────────────────────────────────────
-        to_delete = None
-        for i, seg in enumerate(segs):
-            st.markdown(f"**Segment {i+1}**")
-            c1, c2 = st.columns([2, 1])
-            with c1:
-                rng = st.slider(
-                    "Time range (s)",
-                    min_value=0.0, max_value=total_sec,
-                    value=(float(seg["start"]), float(seg["end"])),
-                    step=0.1, key=f"rng_{i}",
-                )
-                seg["start"], seg["end"] = rng
-            with c2:
-                seg["activity"] = st.selectbox(
-                    "Activity", DRINK_OPTIONS,
-                    index=DRINK_OPTIONS.index(seg["activity"])
-                          if seg["activity"] in DRINK_OPTIONS else 0,
-                    key=f"act_{i}",
-                )
-            n_seg = ((ldf['seconds'] >= seg["start"]) & (ldf['seconds'] <= seg["end"])).sum()
-            dur = seg["end"] - seg["start"]
-            st.caption(f"{seg['start']:.1f}s → {seg['end']:.1f}s · {dur:.1f}s · {n_seg:,} rows")
-            if st.button(f"✕ Remove segment {i+1}", key=f"del_{i}"):
-                to_delete = i
-            st.markdown("")
-
-        if to_delete is not None:
-            segs.pop(to_delete)
-            st.rerun()
-
-        if st.button("＋ Add another segment", use_container_width=True):
-            last_end = segs[-1]["end"] if segs else 0.0
-            segs.append({
-                "activity": DRINK_OPTIONS[0],
-                "start": min(last_end, total_sec),
-                "end": total_sec,
+        for start_idx in range(0, n_rows - WINDOW_SIZE + 1, STEP):
+            window   = xyz[start_idx : start_idx + WINDOW_SIZE].tolist()
+            feats    = extract_features(window)
+            scaled   = scaler.transform(feats)
+            pred     = int(model.predict(scaled)[0])
+            proba    = model.predict_proba(scaled)[0]
+            results.append({
+                'start_s':    round(float(ldf['seconds'].iloc[start_idx]), 2),
+                'end_s':      round(float(ldf['seconds'].iloc[start_idx + WINDOW_SIZE - 1]), 2),
+                'label':      LABEL_NAMES[pred],
+                'confidence': round(float(proba.max()) * 100, 1),
             })
-            st.rerun()
 
-        st.markdown("---")
+        res_df = pd.DataFrame(results)
 
-        # ── Build & download labelled CSV ─────────────────────────
-        ldf['label'] = "unlabelled"
-        for seg in segs:
-            mask = (ldf['seconds'] >= seg["start"]) & (ldf['seconds'] <= seg["end"])
-            ldf.loc[mask, 'label'] = seg["activity"]
+        # ── Collapse consecutive same-label windows into segments ──
+        segments = []
+        if not res_df.empty:
+            cur_label = res_df.iloc[0]['label']
+            cur_start = res_df.iloc[0]['start_s']
+            cur_end   = res_df.iloc[0]['end_s']
+            cur_conf  = [res_df.iloc[0]['confidence']]
 
-        # Summary table
-        summary = (ldf.groupby('label', sort=False)
-                   .agg(rows=('label','count'),
-                        start_s=('seconds','min'),
-                        end_s=('seconds','max'))
-                   .reset_index()
-                   .rename(columns={'label':'Activity','rows':'Rows',
-                                    'start_s':'Start (s)','end_s':'End (s)'}))
-        st.dataframe(summary, use_container_width=True, hide_index=True)
+            for _, row in res_df.iloc[1:].iterrows():
+                if row['label'] == cur_label:
+                    cur_end = row['end_s']
+                    cur_conf.append(row['confidence'])
+                else:
+                    segments.append({
+                        'Activity':      cur_label,
+                        'Start (s)':     cur_start,
+                        'End (s)':       cur_end,
+                        'Duration (s)':  round(cur_end - cur_start, 2),
+                        'Avg confidence': f"{np.mean(cur_conf):.1f}%",
+                    })
+                    cur_label = row['label']
+                    cur_start = row['start_s']
+                    cur_end   = row['end_s']
+                    cur_conf  = [row['confidence']]
 
-        # Export: keep all original cols + seconds + label
-        out_cols = [c for c in ldf.columns if c not in ('seconds','label')]
-        out_df = ldf[out_cols + ['seconds', 'label']].copy()
-        csv_out = out_df.to_csv(index=False)
+            segments.append({
+                'Activity':      cur_label,
+                'Start (s)':     cur_start,
+                'End (s)':       cur_end,
+                'Duration (s)':  round(cur_end - cur_start, 2),
+                'Avg confidence': f"{np.mean(cur_conf):.1f}%",
+            })
 
+        seg_df = pd.DataFrame(segments)
+        st.markdown("#### Detected activity segments")
+        st.dataframe(seg_df, use_container_width=True, hide_index=True)
+
+        # ── Label every row and export ────────────────────────────
+        ldf['label']      = 'unknown'
+        ldf['confidence'] = 0.0
+        for r in results:
+            mask = (ldf['seconds'] >= r['start_s']) & (ldf['seconds'] <= r['end_s'])
+            ldf.loc[mask, 'label']      = r['label']
+            ldf.loc[mask, 'confidence'] = r['confidence']
+
+        csv_out = ldf.to_csv(index=False)
         st.download_button(
             label="⬇️ Download labelled CSV",
             data=csv_out,
-            file_name="labelled_recording.csv",
+            file_name="classified_recording.csv",
             mime="text/csv",
             use_container_width=True,
         )
