@@ -264,12 +264,13 @@ function downloadCSV() {
     }
     let csv = 'timestamp,x,y,z\\n';
     sensorData.forEach(row => { csv += row.join(',') + '\\n'; });
-    let a = document.createElement('a');
+    // Create the link in the PARENT window so Streamlit's iframe doesn't intercept it
+    let a = window.parent.document.createElement('a');
     a.href = 'data:text/csv,' + encodeURIComponent(csv);
     a.download = 'accelerometer_data.csv';
-    document.body.appendChild(a);
+    window.parent.document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
+    window.parent.document.body.removeChild(a);
     document.getElementById('status').style.color = '#51cf66';
     document.getElementById('status').textContent = 'CSV downloaded! Upload it in the Upload CSV tab.';
 }
