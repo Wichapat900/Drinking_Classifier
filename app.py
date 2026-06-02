@@ -358,8 +358,17 @@ with tab3:
             ldf['datetime'] = pd.Timestamp.now(tz='Asia/Bangkok')
 
         total_sec = float(ldf['seconds'].iloc[-1])
-        hz_est    = max(1, round(n_rows / total_sec)) if total_sec > 0 else 60
-        st.success(f"✓ {n_rows:,} rows · {total_sec:.1f} s · ~{hz_est} Hz")
+        
+        # 💡 NEW: Robust Hz calculation that ignores big empty gaps
+        diffs = ldf['seconds'].diff().dropna()
+        normal_diffs = diffs[diffs < 1.0]
+        if len(normal_diffs) > 0 and normal_diffs.median() > 0:
+            hz_est = int(round(1.0 / normal_diffs.median()))
+        else:
+            hz_est = 60
+        hz_est = max(10, min(hz_est, 200))
+
+        st.success(f"✓ {n_rows:,} rows · {total_sec:.1f} s · Detected ~{hz_est} Hz Sampling Rate")
 
         # ── Full waveform plot ────────────────────────────────────
         plot_df = ldf[['x','y','z']].copy()
@@ -369,8 +378,8 @@ with tab3:
         st.markdown("---")
 
         # ── USE OUR NEW IMPORT TO GET SEGMENTS ────────────────────
-        # You can tweak the 0.5 threshold if it's too sensitive or not sensitive enough
-        segments = detect_segments(ldf, hz_est=hz_est, threshold=0.5, min_window=WINDOW_SIZE)
+        # Threshold set to 0.15 to perfectly segment active blocks from timeline data
+        segments = detect_segments(ldf, hz_est=hz_est, threshold=0.15, min_window=WINDOW_SIZE)
 
         # ── Predict on each isolated segment ──────────────────────
         results = []
@@ -398,7 +407,6 @@ with tab3:
                 start_dt = ldf['datetime'].iloc[s_idx]
                 end_dt   = ldf['datetime'].iloc[e_idx]
                 
-                # 👇 FIX: Calculate duration separately to avoid f-string syntax errors
                 duration_sec = float(ldf['seconds'].iloc[e_idx] - ldf['seconds'].iloc[s_idx])
                 
                 results.append({
