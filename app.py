@@ -13,8 +13,10 @@ import streamlit.components.v1 as components
 import numpy as np
 import pandas as pd
 import pickle
-import json
 from pathlib import Path
+
+# 💡 IMPORT OUR NEW MOVEMENT DETECTOR
+from movement_detector import detect_segments
 
 # ── Page config ───────────────────────────────────────────────
 st.set_page_config(
@@ -130,9 +132,7 @@ tab1, tab2, tab3, tab4 = st.tabs(["📱 Live Record", "📂 Upload CSV", "🔬 A
 # ════════════════════════════════════════════════════════════════
 # TAB 1 — Built-in accelerometer
 # ════════════════════════════════════════════════════════════════
-
 with tab1:
-
     accel_html = """
 <!DOCTYPE html>
 <html lang="en">
@@ -140,55 +140,18 @@ with tab1:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-body {
-    font-family: Arial;
-    background: #0d0d14;
-    text-align: center;
-    padding: 20px;
-    margin: 0;
-}
-.container {
-    background: #1a1a2e;
-    max-width: 350px;
-    margin: auto;
-    padding: 20px;
-    border-radius: 20px;
-    box-shadow: 0 0 20px rgba(0,0,0,0.4);
-}
+body { font-family: Arial; background: #0d0d14; text-align: center; padding: 20px; margin: 0; }
+.container { background: #1a1a2e; max-width: 350px; margin: auto; padding: 20px; border-radius: 20px; box-shadow: 0 0 20px rgba(0,0,0,0.4); }
 h1 { color: white; margin-bottom: 10px; }
-.value {
-    font-size: 28px;
-    margin: 10px;
-    color: white;
-}
+.value { font-size: 28px; margin: 10px; color: white; }
 .value span { color: white; font-weight: bold; }
-button {
-    width: 90%;
-    padding: 15px;
-    margin: 6px auto;
-    display: block;
-    border: none;
-    border-radius: 12px;
-    font-size: 18px;
-    font-weight: bold;
-    cursor: pointer;
-    transition: opacity 0.15s;
-}
+button { width: 90%; padding: 15px; margin: 6px auto; display: block; border: none; border-radius: 12px; font-size: 18px; font-weight: bold; cursor: pointer; transition: opacity 0.15s; }
 button:active { opacity: 0.75; }
-.start    { background: #4CAF50; color: white; }
-.stop     { background: #f44336; color: white; }
+.start { background: #4CAF50; color: white; }
+.stop { background: #f44336; color: white; }
 .download { background: #2196F3; color: white; }
-.info {
-    margin-top: 15px;
-    font-size: 18px;
-    color: white;
-}
-.status {
-    margin: 10px 0;
-    font-size: 14px;
-    color: #aaa;
-    min-height: 20px;
-}
+.info { margin-top: 15px; font-size: 18px; color: white; }
+.status { margin: 10px 0; font-size: 14px; color: #aaa; min-height: 20px; }
 </style>
 </head>
 <body>
@@ -199,8 +162,8 @@ button:active { opacity: 0.75; }
     <div class="value">Z: <span id="z">0</span></div>
     <div class="info">Sampling Rate: <span id="hz">0</span> Hz</div>
     <div class="status" id="status">Press Start Recording to begin</div>
-    <button class="start"    onclick="startSensor()">Start Recording</button>
-    <button class="stop"     onclick="stopRecording()">Stop Recording</button>
+    <button class="start" onclick="startSensor()">Start Recording</button>
+    <button class="stop" onclick="stopRecording()">Stop Recording</button>
     <button class="download" onclick="downloadCSV()">Download CSV</button>
 </div>
 <script>
@@ -210,18 +173,12 @@ let sampleCount = 0;
 let startTime = 0;
 
 function startSensor() {
-    sensorData = [];
-    sampleCount = 0;
-    startTime = Date.now();
+    sensorData = []; sampleCount = 0; startTime = Date.now();
     if (typeof DeviceMotionEvent.requestPermission === 'function') {
-        DeviceMotionEvent.requestPermission()
-            .then(permissionState => {
-                if (permissionState === 'granted') { startListening(); }
-            })
-            .catch(console.error);
-    } else {
-        startListening();
-    }
+        DeviceMotionEvent.requestPermission().then(permissionState => {
+            if (permissionState === 'granted') { startListening(); }
+        }).catch(console.error);
+    } else { startListening(); }
 }
 
 function startListening() {
@@ -239,8 +196,7 @@ function handleMotion(event) {
     document.getElementById('x').innerHTML = x.toFixed(2);
     document.getElementById('y').innerHTML = y.toFixed(2);
     document.getElementById('z').innerHTML = z.toFixed(2);
-    let timestamp = Date.now();
-    sensorData.push([timestamp, x, y, z]);
+    sensorData.push([Date.now(), x, y, z]);
     sampleCount++;
     document.getElementById('status').textContent = `Recording... ${sampleCount} samples`;
 }
@@ -252,25 +208,16 @@ function stopRecording() {
     let hz = sampleCount / duration;
     document.getElementById('hz').innerHTML = hz.toFixed(2);
     document.getElementById('status').style.color = '#51cf66';
-    document.getElementById('status').textContent =
-        `Done! ${sampleCount} samples @ ${hz.toFixed(1)} Hz — press Download CSV`;
+    document.getElementById('status').textContent = `Done! ${sampleCount} samples @ ${hz.toFixed(1)} Hz — press Download CSV`;
 }
 
 function downloadCSV() {
-    if (sensorData.length === 0) {
-        document.getElementById('status').style.color = '#f44336';
-        document.getElementById('status').textContent = 'No data yet — record first!';
-        return;
-    }
+    if (sensorData.length === 0) return;
     let csv = 'timestamp,x,y,z\\n';
     sensorData.forEach(row => { csv += row.join(',') + '\\n'; });
     let uri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-    // window.open on the parent triggers the browser's native Save/Share on iOS
     let w = window.parent.open(uri, '_blank');
-    if (!w) {
-        // Popup blocked fallback — open directly in this frame
-        window.open(uri, '_blank');
-    }
+    if (!w) { window.open(uri, '_blank'); }
     document.getElementById('status').style.color = '#51cf66';
     document.getElementById('status').textContent = 'Opened! Tap Share → Save to Files, then upload in Upload CSV tab.';
 }
@@ -278,9 +225,7 @@ function downloadCSV() {
 </body>
 </html>
 """
-
     components.html(accel_html, height=480, scrolling=False)
-
     st.markdown("""
 <div class="instr-card" style="margin-top:1rem">
 ⚠️ <b>iOS users:</b> The accelerometer requires HTTPS + a permission prompt.<br>
@@ -290,6 +235,9 @@ For local testing on your phone, run: <code>npx ngrok http 8501</code> and open 
 """, unsafe_allow_html=True)
 
 
+# ════════════════════════════════════════════════════════════════
+# TAB 2 — Upload CSV
+# ════════════════════════════════════════════════════════════════
 with tab2:
     uploaded = st.file_uploader(
         "Upload accelerometer CSV (columns: timestamp, x, y, z)",
@@ -371,7 +319,7 @@ with tab4:
 # ════════════════════════════════════════════════════════════════
 with tab3:
     st.markdown("#### 🔬 Auto-classify by Activity Segments")
-    st.caption("Upload a CSV. I will automatically detect when you start and stop moving, cut those 'wiggles' out, and predict the drink for each block.")
+    st.caption("Upload a CSV. The `movement_detector` will automatically crop the silence, cut out the 'wiggles', and predict each chunk.")
 
     label_file = st.file_uploader(
         "Upload merged CSV (timestamp, x, y, z)", type=["csv"], key="label_upload"
@@ -389,6 +337,7 @@ with tab3:
                 ldf = None
             except Exception:
                 continue
+        
         if ldf is None:
             st.error("Could not read the file. Make sure it has x, y, z columns.")
             st.stop()
@@ -419,63 +368,25 @@ with tab3:
 
         st.markdown("---")
 
-        # ── Detect Activity Boundaries ("The Wiggles") ────────────
-        
-        # Calculate moving standard deviation to find areas of motion (window = half a second)
-        ROLLING_WIN = max(10, hz_est // 2)
-        ldf['motion_var'] = ldf['x'].rolling(ROLLING_WIN).std().fillna(0) + \
-                            ldf['y'].rolling(ROLLING_WIN).std().fillna(0) + \
-                            ldf['z'].rolling(ROLLING_WIN).std().fillna(0)
-        
-        # Threshold to flag if the phone is currently moving
-        ACTIVITY_THRESHOLD = 0.5 
-        ldf['is_moving'] = ldf['motion_var'] > ACTIVITY_THRESHOLD
-
-        # State machine to chop the timeline into segments
-        segments = []
-        in_segment = False
-        start_idx = 0
-        silence_counter = 0
-        MAX_SILENCE = hz_est  # Allow up to 1 second of silence before cutting the segment
-        
-        for i in range(len(ldf)):
-            if ldf['is_moving'].iloc[i]:
-                if not in_segment:
-                    in_segment = True
-                    start_idx = i
-                silence_counter = 0 # reset silence countdown
-            else:
-                if in_segment:
-                    silence_counter += 1
-                    # If it's been quiet for too long, cut the clip!
-                    if silence_counter > MAX_SILENCE:
-                        end_idx = i - MAX_SILENCE
-                        
-                        # Only keep the segment if it's longer than our minimum window size (so the model doesn't crash on tiny blips)
-                        if (end_idx - start_idx) >= WINDOW_SIZE:
-                            segments.append((start_idx, end_idx))
-                        
-                        in_segment = False
-
-        # Edge case: file ends while still in a segment
-        if in_segment and (len(ldf) - start_idx) >= WINDOW_SIZE:
-            segments.append((start_idx, len(ldf) - 1))
+        # ── USE OUR NEW IMPORT TO GET SEGMENTS ────────────────────
+        # You can tweak the 0.5 threshold if it's too sensitive or not sensitive enough
+        segments = detect_segments(ldf, hz_est=hz_est, threshold=0.5, min_window=WINDOW_SIZE)
 
         # ── Predict on each isolated segment ──────────────────────
         results = []
         xyz = ldf[['x','y','z']].values
         
-        ldf['label'] = 'Idle 😴'  # Default state
+        ldf['label'] = 'Idle 😴'  
         ldf['confidence'] = 0.0
 
         if not segments:
-            st.info("No clear drinking activity detected! Try lowering the ACTIVITY_THRESHOLD in the code if your movements are very gentle.")
+            st.info("No clear drinking activity detected! Try lowering the threshold in `detect_segments` if your movements are very gentle.")
         else:
             for i, (s_idx, e_idx) in enumerate(segments):
                 # 1. Isolate the "wiggle" data
                 segment_data = xyz[s_idx : e_idx + 1].tolist()
                 
-                # 2. Extract features for this entire block and predict
+                # 2. Extract features and predict
                 feats = extract_features(segment_data)
                 scaled = scaler.transform(feats)
                 pred = int(model.predict(scaled)[0])
@@ -492,50 +403,4 @@ with tab3:
                     'Activity':    label,
                     'Start time':  start_dt.strftime('%H:%M:%S.%f')[:-3],
                     'End time':    end_dt.strftime('%H:%M:%S.%f')[:-3],
-                    'Duration':    f"{float(ldf['seconds'].iloc[e_idx] - ldf['seconds'].iloc[s_idx]):.1f}s",
-                    'Confidence':  f"{conf_pct:.1f}%",
-                })
-                
-                # Tag the rows in the main dataframe for export
-                ldf.loc[s_idx:e_idx, 'label'] = label
-                ldf.loc[s_idx:e_idx, 'confidence'] = conf_pct
-
-            res_df = pd.DataFrame(results)
-
-            # ── Display the results ───────────────────────────────────
-            st.markdown("#### 📋 Detected Activities")
-            for _, row in res_df.iterrows():
-                try:
-                    emoji = row['Activity'].split()[0]
-                    name  = ' '.join(row['Activity'].split()[1:])
-                except IndexError:
-                    emoji = "✨"
-                    name  = row['Activity']
-                    
-                st.markdown(
-                    f"**{row['Segment']}** &nbsp;→&nbsp; {emoji} **{name}** &nbsp;·&nbsp; "
-                    f"*{row['Start time']} to {row['End time']}* &nbsp;·&nbsp; "
-                    f"Duration: {row['Duration']} &nbsp;·&nbsp; Conf: {row['Confidence']}"
-                )
-
-            st.markdown("---")
-            st.markdown("#### Segment Details Table")
-            st.dataframe(res_df, use_container_width=True, hide_index=True)
-
-        # ── Export ────────────────────────────────────────────────
-        out_df = ldf.drop(columns=['motion_var', 'is_moving'], errors='ignore')
-        out_df['datetime'] = out_df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
-        
-        st.download_button(
-            label="⬇️ Download Labelled CSV",
-            data=out_df.to_csv(index=False),
-            file_name="classified_recording.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-# ── Footer ────────────────────────────────────────────────────
-st.markdown(
-    "<br><p class='mono' style='text-align:center'>model: RandomForest · features: 37 · cv-accuracy: 99.9%</p>",
-    unsafe_allow_html=True
-)
+                    'Duration':    f"{float(ldf['seconds'].iloc[e_idx] - ldf['seconds'].iloc
