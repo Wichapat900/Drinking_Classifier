@@ -365,19 +365,20 @@ with tab4:
 </div>
 """, unsafe_allow_html=True)
 
+
 # ════════════════════════════════════════════════════════════════
-# TAB 3 — Auto-Classify Timeline
+# TAB 3 — Auto-Classify Timeline (EVENT-BASED CHUNKING)
 # ════════════════════════════════════════════════════════════════
 with tab3:
-    st.markdown("#### 🔬 Auto-classify a merged recording")
-    st.caption("Upload a CSV with multiple activities merged together. The model classifies each window automatically and outputs a labelled timeline.")
+    st.markdown("#### 🔬 Auto-classify by Activity Segments")
+    st.caption("Upload a CSV. I will automatically detect when you start and stop moving, cut those 'wiggles' out, and predict the drink for each block.")
 
     label_file = st.file_uploader(
         "Upload merged CSV (timestamp, x, y, z)", type=["csv"], key="label_upload"
     )
 
     if label_file:
-        # ── Load — try every encoding, latin-1 never fails ────────
+        # ── Load CSV ──────────────────────────────────────────────
         raw_bytes = label_file.read()
         ldf = None
         for enc in ['utf-8-sig', 'utf-8', 'utf-16', 'utf-16-le', 'utf-16-be', 'cp1252', 'latin-1']:
@@ -385,7 +386,7 @@ with tab3:
                 ldf = pd.read_csv(pd.io.common.BytesIO(raw_bytes), encoding=enc)
                 if {'x','y','z'}.issubset(ldf.columns):
                     break
-                ldf = None   # columns wrong, try next
+                ldf = None
             except Exception:
                 continue
         if ldf is None:
@@ -395,13 +396,10 @@ with tab3:
         n_rows = len(ldf)
 
         # ── Parse timestamps → real datetime ──────────────────────
-        from datetime import timezone as _tz
         ts_col = next((c for c in ldf.columns if 'time' in c.lower()), None)
         if ts_col:
             ts_raw = pd.to_numeric(ldf[ts_col], errors='coerce').ffill()
             t0_raw = ts_raw.iloc[0]
-            span   = ts_raw.iloc[-1] - t0_raw
-            # detect ms vs seconds: Unix ms timestamps are > 1e11
             is_ms  = t0_raw > 1e11
             ts_sec = ts_raw / 1000.0 if is_ms else ts_raw
             ldf['datetime'] = pd.to_datetime(ts_sec, unit='s', utc=True).dt.tz_convert('Asia/Bangkok')
@@ -412,141 +410,125 @@ with tab3:
 
         total_sec = float(ldf['seconds'].iloc[-1])
         hz_est    = max(1, round(n_rows / total_sec)) if total_sec > 0 else 60
-        rec_start = ldf['datetime'].iloc[0]
-        rec_end   = ldf['datetime'].iloc[-1]
         st.success(f"✓ {n_rows:,} rows · {total_sec:.1f} s · ~{hz_est} Hz")
-        st.caption(f"🕐 Recording: {rec_start.strftime('%d %b %Y  %H:%M:%S')} → {rec_end.strftime('%H:%M:%S')}")
 
-        # ── Full waveform with real time on x-axis ────────────────
+        # ── Full waveform plot ────────────────────────────────────
         plot_df = ldf[['x','y','z']].copy()
         plot_df.index = ldf['seconds']
         st.line_chart(plot_df, use_container_width=True, height=200)
 
         st.markdown("---")
 
-        # ── Sliding-window classification ─────────────────────────
-        STEP   = WINDOW_SIZE // 2
-        results = []
-        xyz    = ldf[['x','y','z']].values
-
-        # 💡 Set a minimum movement threshold to trigger the model. 
-        # You may need to tune this number (e.g., 0.3 to 1.5) based on sensor noise.
-        ACTIVITY_THRESHOLD = 0.5 
-
-        for start_idx in range(0, n_rows - WINDOW_SIZE + 1, STEP):
-            window_arr = xyz[start_idx : start_idx + WINDOW_SIZE]
-            
-            # Calculate total movement variance across all 3 axes
-            motion_variance = np.std(window_arr[:, 0]) + np.std(window_arr[:, 1]) + np.std(window_arr[:, 2])
-            
-            start_s  = round(float(ldf['seconds'].iloc[start_idx]), 2)
-            end_s    = round(float(ldf['seconds'].iloc[start_idx + WINDOW_SIZE - 1]), 2)
-            start_dt = ldf['datetime'].iloc[start_idx]
-            end_dt   = ldf['datetime'].iloc[start_idx + WINDOW_SIZE - 1]
-
-            if motion_variance < ACTIVITY_THRESHOLD:
-                # Phone is relatively still -> Skip prediction
-                pred_label = "Idle 😴"
-                confidence = 100.0
-            else:
-                # Movement detected -> Run the classifier!
-                window_list = window_arr.tolist()
-                feats  = extract_features(window_list)
-                scaled = scaler.transform(feats)
-                pred   = int(model.predict(scaled)[0])
-                proba  = model.predict_proba(scaled)[0]
-                
-                pred_label = LABEL_NAMES[pred]
-                confidence = round(float(proba.max()) * 100, 1)
-
-            results.append({
-                'start_idx':  start_idx,
-                'end_idx':    start_idx + WINDOW_SIZE - 1,
-                'start_s':    start_s,
-                'end_s':      end_s,
-                'start_dt':   start_dt,
-                'end_dt':     end_dt,
-                'label':      pred_label,
-                'confidence': confidence,
-            })
-
-        res_df = pd.DataFrame(results)
-
-        # ── Collapse consecutive same-label windows → segments ────
-        segments = []
-        if not res_df.empty:
-            cur = res_df.iloc[0].to_dict()
-            cur_conf = [cur['confidence']]
-
-            for _, row in res_df.iloc[1:].iterrows():
-                if row['label'] == cur['label']:
-                    cur['end_s']  = row['end_s']
-                    cur['end_dt'] = row['end_dt']
-                    cur_conf.append(row['confidence'])
-                else:
-                    segments.append({
-                        'Activity':        cur['label'],
-                        'Start time':      cur['start_dt'].strftime('%H:%M:%S'),
-                        'End time':        cur['end_dt'].strftime('%H:%M:%S'),
-                        'Duration':        f"{cur['end_s'] - cur['start_s']:.1f}s",
-                        'Confidence':      f"{np.mean(cur_conf):.1f}%",
-                    })
-                    cur = row.to_dict()
-                    cur_conf = [row['confidence']]
-
-            segments.append({
-                'Activity':   cur['label'],
-                'Start time': cur['start_dt'].strftime('%H:%M:%S'),
-                'End time':   cur['end_dt'].strftime('%H:%M:%S'),
-                'Duration':   f"{cur['end_s'] - cur['start_s']:.1f}s",
-                'Confidence': f"{np.mean(cur_conf):.1f}%",
-            })
-
-        seg_df = pd.DataFrame(segments)
-
-        # 💡 NEW: Filter out the Idle segments so only real activities show in the UI
-        active_seg_df = seg_df[seg_df['Activity'] != "Idle 😴"]
-
-        # ── Human-readable summary ────────────────────────────────
-        st.markdown("#### 📋 Activity summary")
+        # ── Detect Activity Boundaries ("The Wiggles") ────────────
         
-        if active_seg_df.empty:
-             st.info("No drinking motion detected in this recording!")
+        # Calculate moving standard deviation to find areas of motion (window = half a second)
+        ROLLING_WIN = max(10, hz_est // 2)
+        ldf['motion_var'] = ldf['x'].rolling(ROLLING_WIN).std().fillna(0) + \
+                            ldf['y'].rolling(ROLLING_WIN).std().fillna(0) + \
+                            ldf['z'].rolling(ROLLING_WIN).std().fillna(0)
+        
+        # Threshold to flag if the phone is currently moving
+        ACTIVITY_THRESHOLD = 0.5 
+        ldf['is_moving'] = ldf['motion_var'] > ACTIVITY_THRESHOLD
+
+        # State machine to chop the timeline into segments
+        segments = []
+        in_segment = False
+        start_idx = 0
+        silence_counter = 0
+        MAX_SILENCE = hz_est  # Allow up to 1 second of silence before cutting the segment
+        
+        for i in range(len(ldf)):
+            if ldf['is_moving'].iloc[i]:
+                if not in_segment:
+                    in_segment = True
+                    start_idx = i
+                silence_counter = 0 # reset silence countdown
+            else:
+                if in_segment:
+                    silence_counter += 1
+                    # If it's been quiet for too long, cut the clip!
+                    if silence_counter > MAX_SILENCE:
+                        end_idx = i - MAX_SILENCE
+                        
+                        # Only keep the segment if it's longer than our minimum window size (so the model doesn't crash on tiny blips)
+                        if (end_idx - start_idx) >= WINDOW_SIZE:
+                            segments.append((start_idx, end_idx))
+                        
+                        in_segment = False
+
+        # Edge case: file ends while still in a segment
+        if in_segment and (len(ldf) - start_idx) >= WINDOW_SIZE:
+            segments.append((start_idx, len(ldf) - 1))
+
+        # ── Predict on each isolated segment ──────────────────────
+        results = []
+        xyz = ldf[['x','y','z']].values
+        
+        ldf['label'] = 'Idle 😴'  # Default state
+        ldf['confidence'] = 0.0
+
+        if not segments:
+            st.info("No clear drinking activity detected! Try lowering the ACTIVITY_THRESHOLD in the code if your movements are very gentle.")
         else:
-            for _, seg in active_seg_df.iterrows():
+            for i, (s_idx, e_idx) in enumerate(segments):
+                # 1. Isolate the "wiggle" data
+                segment_data = xyz[s_idx : e_idx + 1].tolist()
+                
+                # 2. Extract features for this entire block and predict
+                feats = extract_features(segment_data)
+                scaled = scaler.transform(feats)
+                pred = int(model.predict(scaled)[0])
+                proba = model.predict_proba(scaled)[0]
+                
+                label = LABEL_NAMES[pred]
+                conf_pct = float(proba.max() * 100)
+                
+                start_dt = ldf['datetime'].iloc[s_idx]
+                end_dt   = ldf['datetime'].iloc[e_idx]
+                
+                results.append({
+                    'Segment':     f"Action {i+1}",
+                    'Activity':    label,
+                    'Start time':  start_dt.strftime('%H:%M:%S.%f')[:-3],
+                    'End time':    end_dt.strftime('%H:%M:%S.%f')[:-3],
+                    'Duration':    f"{float(ldf['seconds'].iloc[e_idx] - ldf['seconds'].iloc[s_idx]):.1f}s",
+                    'Confidence':  f"{conf_pct:.1f}%",
+                })
+                
+                # Tag the rows in the main dataframe for export
+                ldf.loc[s_idx:e_idx, 'label'] = label
+                ldf.loc[s_idx:e_idx, 'confidence'] = conf_pct
+
+            res_df = pd.DataFrame(results)
+
+            # ── Display the results ───────────────────────────────────
+            st.markdown("#### 📋 Detected Activities")
+            for _, row in res_df.iterrows():
                 try:
-                    emoji = seg['Activity'].split()[0]
-                    name  = ' '.join(seg['Activity'].split()[1:])
+                    emoji = row['Activity'].split()[0]
+                    name  = ' '.join(row['Activity'].split()[1:])
                 except IndexError:
                     emoji = "✨"
-                    name  = seg['Activity']
+                    name  = row['Activity']
                     
                 st.markdown(
-                    f"{emoji} **{seg['Start time']} → {seg['End time']}** &nbsp;·&nbsp; "
-                    f"{name} &nbsp;·&nbsp; {seg['Duration']} &nbsp;·&nbsp; "
-                    f"confidence {seg['Confidence']}"
+                    f"**{row['Segment']}** &nbsp;→&nbsp; {emoji} **{name}** &nbsp;·&nbsp; "
+                    f"*{row['Start time']} to {row['End time']}* &nbsp;·&nbsp; "
+                    f"Duration: {row['Duration']} &nbsp;·&nbsp; Conf: {row['Confidence']}"
                 )
 
             st.markdown("---")
-            st.markdown("#### Detailed segment table")
-            st.dataframe(active_seg_df, use_container_width=True, hide_index=True)
+            st.markdown("#### Segment Details Table")
+            st.dataframe(res_df, use_container_width=True, hide_index=True)
 
-        # ── Label every row and export ────────────────────────────
-        ldf['label']      = 'unknown'
-        ldf['confidence'] = 0.0
-        for r in results:
-            mask = (ldf['seconds'] >= r['start_s']) & (ldf['seconds'] <= r['end_s'])
-            ldf.loc[mask, 'label']      = r['label']
-            ldf.loc[mask, 'confidence'] = r['confidence']
-
-        # Format datetime nicely for export
-        out_df = ldf.copy()
-        out_df['datetime'] = ldf['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S')
-
-        csv_out = out_df.to_csv(index=False)
+        # ── Export ────────────────────────────────────────────────
+        out_df = ldf.drop(columns=['motion_var', 'is_moving'], errors='ignore')
+        out_df['datetime'] = out_df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
+        
         st.download_button(
-            label="⬇️ Download labelled CSV",
-            data=csv_out,
+            label="⬇️ Download Labelled CSV",
+            data=out_df.to_csv(index=False),
             file_name="classified_recording.csv",
             mime="text/csv",
             use_container_width=True,
