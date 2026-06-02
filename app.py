@@ -365,7 +365,16 @@ with tab3:
     label_file = st.file_uploader("Upload merged CSV (timestamp, x, y, z)", type=["csv"], key="label_upload")
 
     if label_file:
-        ldf = pd.read_csv(label_file)
+        for enc in ['utf-8', 'cp1252', 'latin-1', 'utf-16']:
+            try:
+                label_file.seek(0)
+                ldf = pd.read_csv(label_file, encoding=enc)
+                break
+            except (UnicodeDecodeError, Exception):
+                continue
+        else:
+            st.error("Could not decode the CSV. Try re-saving it as UTF-8 from Excel or Numbers.")
+            st.stop()
         if not {'x','y','z'}.issubset(ldf.columns):
             st.error(f"Need x, y, z columns. Found: {list(ldf.columns)}")
         else:
