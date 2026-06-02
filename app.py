@@ -394,22 +394,30 @@ with tab3:
 
         n_rows = len(ldf)
 
-        # ── Seconds column ────────────────────────────────────────
+        # ── Parse timestamps → real datetime ──────────────────────
+        from datetime import timezone as _tz
         ts_col = next((c for c in ldf.columns if 'time' in c.lower()), None)
         if ts_col:
-            ts = pd.to_numeric(ldf[ts_col], errors='coerce').ffill()
-            t0 = ts.iloc[0]
-            span = ts.iloc[-1] - t0
-            divisor = 1000.0 if span > 1_000_000 else 1.0
-            ldf['seconds'] = ((ts - t0) / divisor).round(3)
+            ts_raw = pd.to_numeric(ldf[ts_col], errors='coerce').ffill()
+            t0_raw = ts_raw.iloc[0]
+            span   = ts_raw.iloc[-1] - t0_raw
+            # detect ms vs seconds: Unix ms timestamps are > 1e11
+            is_ms  = t0_raw > 1e11
+            ts_sec = ts_raw / 1000.0 if is_ms else ts_raw
+            ldf['datetime'] = pd.to_datetime(ts_sec, unit='s', utc=True).dt.tz_convert('Asia/Bangkok')
+            ldf['seconds']  = ((ts_raw - t0_raw) / (1000.0 if is_ms else 1.0)).round(3)
         else:
-            ldf['seconds'] = (np.arange(n_rows) / 60.0).round(3)
+            ldf['seconds']  = (np.arange(n_rows) / 60.0).round(3)
+            ldf['datetime'] = pd.Timestamp.now(tz='Asia/Bangkok')
 
         total_sec = float(ldf['seconds'].iloc[-1])
-        hz_est = max(1, round(n_rows / total_sec)) if total_sec > 0 else 60
+        hz_est    = max(1, round(n_rows / total_sec)) if total_sec > 0 else 60
+        rec_start = ldf['datetime'].iloc[0]
+        rec_end   = ldf['datetime'].iloc[-1]
         st.success(f"✓ {n_rows:,} rows · {total_sec:.1f} s · ~{hz_est} Hz")
+        st.caption(f"🕐 Recording: {rec_start.strftime('%d %b %Y  %H:%M:%S')} → {rec_end.strftime('%H:%M:%S')}")
 
-        # ── Full waveform ─────────────────────────────────────────
+        # ── Full waveform with real time on x-axis ────────────────
         plot_df = ldf[['x','y','z']].copy()
         plot_df.index = ldf['seconds']
         st.line_chart(plot_df, use_container_width=True, height=200)
@@ -417,62 +425,111 @@ with tab3:
         st.markdown("---")
 
         # ── Sliding-window classification ─────────────────────────
-        STEP = WINDOW_SIZE // 2   # 50 % overlap
+        STEP   = WINDOW_SIZE // 2
+        results = []
+        xyz    = ldf[['x','y','z']].values
 
-        results = []   # {start_s, end_s, label, proba}
-        xyz = ldf[['x','y','z']].values
+        # 💡 Set a minimum movement threshold to trigger the model. 
+        # You may need to tune this number (e.g., 0.3 to 1.5) based on sensor noise.
+        ACTIVITY_THRESHOLD = 0.5 
 
         for start_idx in range(0, n_rows - WINDOW_SIZE + 1, STEP):
-            window   = xyz[start_idx : start_idx + WINDOW_SIZE].tolist()
-            feats    = extract_features(window)
-            scaled   = scaler.transform(feats)
-            pred     = int(model.predict(scaled)[0])
-            proba    = model.predict_proba(scaled)[0]
+            window_arr = xyz[start_idx : start_idx + WINDOW_SIZE]
+            
+            # Calculate total movement variance across all 3 axes
+            motion_variance = np.std(window_arr[:, 0]) + np.std(window_arr[:, 1]) + np.std(window_arr[:, 2])
+            
+            start_s  = round(float(ldf['seconds'].iloc[start_idx]), 2)
+            end_s    = round(float(ldf['seconds'].iloc[start_idx + WINDOW_SIZE - 1]), 2)
+            start_dt = ldf['datetime'].iloc[start_idx]
+            end_dt   = ldf['datetime'].iloc[start_idx + WINDOW_SIZE - 1]
+
+            if motion_variance < ACTIVITY_THRESHOLD:
+                # Phone is relatively still -> Skip prediction
+                pred_label = "Idle 😴"
+                confidence = 100.0
+            else:
+                # Movement detected -> Run the classifier!
+                window_list = window_arr.tolist()
+                feats  = extract_features(window_list)
+                scaled = scaler.transform(feats)
+                pred   = int(model.predict(scaled)[0])
+                proba  = model.predict_proba(scaled)[0]
+                
+                pred_label = LABEL_NAMES[pred]
+                confidence = round(float(proba.max()) * 100, 1)
+
             results.append({
-                'start_s':    round(float(ldf['seconds'].iloc[start_idx]), 2),
-                'end_s':      round(float(ldf['seconds'].iloc[start_idx + WINDOW_SIZE - 1]), 2),
-                'label':      LABEL_NAMES[pred],
-                'confidence': round(float(proba.max()) * 100, 1),
+                'start_idx':  start_idx,
+                'end_idx':    start_idx + WINDOW_SIZE - 1,
+                'start_s':    start_s,
+                'end_s':      end_s,
+                'start_dt':   start_dt,
+                'end_dt':     end_dt,
+                'label':      pred_label,
+                'confidence': confidence,
             })
 
         res_df = pd.DataFrame(results)
 
-        # ── Collapse consecutive same-label windows into segments ──
+        # ── Collapse consecutive same-label windows → segments ────
         segments = []
         if not res_df.empty:
-            cur_label = res_df.iloc[0]['label']
-            cur_start = res_df.iloc[0]['start_s']
-            cur_end   = res_df.iloc[0]['end_s']
-            cur_conf  = [res_df.iloc[0]['confidence']]
+            cur = res_df.iloc[0].to_dict()
+            cur_conf = [cur['confidence']]
 
             for _, row in res_df.iloc[1:].iterrows():
-                if row['label'] == cur_label:
-                    cur_end = row['end_s']
+                if row['label'] == cur['label']:
+                    cur['end_s']  = row['end_s']
+                    cur['end_dt'] = row['end_dt']
                     cur_conf.append(row['confidence'])
                 else:
                     segments.append({
-                        'Activity':      cur_label,
-                        'Start (s)':     cur_start,
-                        'End (s)':       cur_end,
-                        'Duration (s)':  round(cur_end - cur_start, 2),
-                        'Avg confidence': f"{np.mean(cur_conf):.1f}%",
+                        'Activity':        cur['label'],
+                        'Start time':      cur['start_dt'].strftime('%H:%M:%S'),
+                        'End time':        cur['end_dt'].strftime('%H:%M:%S'),
+                        'Duration':        f"{cur['end_s'] - cur['start_s']:.1f}s",
+                        'Confidence':      f"{np.mean(cur_conf):.1f}%",
                     })
-                    cur_label = row['label']
-                    cur_start = row['start_s']
-                    cur_end   = row['end_s']
-                    cur_conf  = [row['confidence']]
+                    cur = row.to_dict()
+                    cur_conf = [row['confidence']]
 
             segments.append({
-                'Activity':      cur_label,
-                'Start (s)':     cur_start,
-                'End (s)':       cur_end,
-                'Duration (s)':  round(cur_end - cur_start, 2),
-                'Avg confidence': f"{np.mean(cur_conf):.1f}%",
+                'Activity':   cur['label'],
+                'Start time': cur['start_dt'].strftime('%H:%M:%S'),
+                'End time':   cur['end_dt'].strftime('%H:%M:%S'),
+                'Duration':   f"{cur['end_s'] - cur['start_s']:.1f}s",
+                'Confidence': f"{np.mean(cur_conf):.1f}%",
             })
 
         seg_df = pd.DataFrame(segments)
-        st.markdown("#### Detected activity segments")
-        st.dataframe(seg_df, use_container_width=True, hide_index=True)
+
+        # 💡 NEW: Filter out the Idle segments so only real activities show in the UI
+        active_seg_df = seg_df[seg_df['Activity'] != "Idle 😴"]
+
+        # ── Human-readable summary ────────────────────────────────
+        st.markdown("#### 📋 Activity summary")
+        
+        if active_seg_df.empty:
+             st.info("No drinking motion detected in this recording!")
+        else:
+            for _, seg in active_seg_df.iterrows():
+                try:
+                    emoji = seg['Activity'].split()[0]
+                    name  = ' '.join(seg['Activity'].split()[1:])
+                except IndexError:
+                    emoji = "✨"
+                    name  = seg['Activity']
+                    
+                st.markdown(
+                    f"{emoji} **{seg['Start time']} → {seg['End time']}** &nbsp;·&nbsp; "
+                    f"{name} &nbsp;·&nbsp; {seg['Duration']} &nbsp;·&nbsp; "
+                    f"confidence {seg['Confidence']}"
+                )
+
+            st.markdown("---")
+            st.markdown("#### Detailed segment table")
+            st.dataframe(active_seg_df, use_container_width=True, hide_index=True)
 
         # ── Label every row and export ────────────────────────────
         ldf['label']      = 'unknown'
@@ -482,7 +539,11 @@ with tab3:
             ldf.loc[mask, 'label']      = r['label']
             ldf.loc[mask, 'confidence'] = r['confidence']
 
-        csv_out = ldf.to_csv(index=False)
+        # Format datetime nicely for export
+        out_df = ldf.copy()
+        out_df['datetime'] = ldf['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+        csv_out = out_df.to_csv(index=False)
         st.download_button(
             label="⬇️ Download labelled CSV",
             data=csv_out,
