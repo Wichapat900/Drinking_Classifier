@@ -1,11 +1,5 @@
 """
 Drink Mind Reader — Streamlit App with built-in accelerometer
-Deploy: push to GitHub → share.streamlit.io → select app.py
-Local:  streamlit run app.py
-
-NOTE: Accelerometer requires HTTPS in production.
-      Streamlit Cloud provides HTTPS automatically.
-      For local testing on phone, use: npx ngrok http 8501
 """
 
 import streamlit as st
@@ -14,9 +8,6 @@ import numpy as np
 import pandas as pd
 import pickle
 from pathlib import Path
-
-# 💡 IMPORT OUR NEW MOVEMENT DETECTOR
-from movement_detector import detect_segments
 
 # ── Page config ───────────────────────────────────────────────
 st.set_page_config(
@@ -36,6 +27,47 @@ LABEL_DESCS  = {
     2: "Dynamic high-range tilting detected — lots of acceleration variance. You're chugging from a bottle!",
 }
 
+# ── Movement Detector (MOVED INSIDE APP.PY TO FIX CACHING) ────
+def detect_segments(df: pd.DataFrame, hz_est: int, threshold: float = 0.15, min_window: int = 60) -> list:
+    segments = []
+    
+    # 1. Break the data into continuous blocks based on time gaps > 2 seconds
+    dt = df['seconds'].diff().fillna(0)
+    break_points = df.index[dt > 2.0].tolist()
+    
+    blocks = []
+    start_b = 0
+    for bp in break_points:
+        blocks.append((start_b, bp - 1))
+        start_b = bp
+    blocks.append((start_b, len(df) - 1))
+    
+    # 2. Within each block, find the actual movement (trimming silence)
+    rolling_win = max(10, hz_est // 2)
+    
+    for b_start, b_end in blocks:
+        if (b_end - b_start) < min_window:
+            continue  
+            
+        block_df = df.iloc[b_start:b_end+1]
+        
+        motion_var = (block_df['x'].rolling(rolling_win).std().fillna(0) +
+                      block_df['y'].rolling(rolling_win).std().fillna(0) +
+                      block_df['z'].rolling(rolling_win).std().fillna(0))
+        
+        is_moving = (motion_var > threshold).to_numpy()
+        moving_indices = np.where(is_moving)[0]
+        
+        if len(moving_indices) > 0:
+            seg_start = b_start + moving_indices[0]
+            seg_start = max(b_start, seg_start - (rolling_win // 2)) 
+            seg_end = b_start + moving_indices[-1]
+            
+            if (seg_end - seg_start) >= min_window:
+                segments.append((seg_start, seg_end))
+                
+    return segments
+
 # ── Load model ────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
 
@@ -51,7 +83,7 @@ def load_model():
 
 model, scaler = load_model()
 
-# ── Feature extraction (must match train_model.py exactly) ────
+# ── Feature extraction ────────────────────────────────────────
 def extract_features(data: list) -> np.ndarray:
     x = np.array([d[0] for d in data], dtype=float)
     y = np.array([d[1] for d in data], dtype=float)
@@ -84,31 +116,16 @@ def extract_features(data: list) -> np.ndarray:
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=Space+Mono&display=swap');
-
 html, body, [class*="css"] { font-family: 'Syne', sans-serif; }
 .stApp { background: #0d0d14; }
-
 .hero { text-align: center; padding: 2rem 0 1rem; }
-.hero h1 {
-    font-size: 2.8rem; font-weight: 800;
-    background: linear-gradient(135deg, #f953c6, #b91d73, #2196F3);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    margin-bottom: 0.3rem;
-}
+.hero h1 { font-size: 2.8rem; font-weight: 800; background: linear-gradient(135deg, #f953c6, #b91d73, #2196F3); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 0.3rem; }
 .hero p { color: #888; font-size: 1rem; }
-
-.result-box {
-    background: rgba(255,255,255,0.05); border-radius: 20px;
-    padding: 2rem; text-align: center; border: 2px solid; margin-top: 1.5rem;
-}
+.result-box { background: rgba(255,255,255,0.05); border-radius: 20px; padding: 2rem; text-align: center; border: 2px solid; margin-top: 1.5rem; }
 .result-emoji { font-size: 4.5rem; }
 .result-name  { font-size: 2rem; font-weight: 800; color: white; margin: 0.5rem 0; }
 .result-desc  { color: #aaa; font-size: 0.95rem; line-height: 1.6; }
-.instr-card {
-    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 14px; padding: 1.2rem 1.5rem; margin-bottom: 1rem;
-    color: #ccc; font-size: 0.92rem; line-height: 1.7;
-}
+.instr-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 14px; padding: 1.2rem 1.5rem; margin-bottom: 1rem; color: #ccc; font-size: 0.92rem; line-height: 1.7; }
 .mono { font-family: 'Space Mono', monospace; font-size: 0.8rem; color: #666; }
 div[data-testid="stFileUploader"] label { color: #ccc !important; }
 </style>
@@ -234,7 +251,6 @@ For local testing on your phone, run: <code>npx ngrok http 8501</code> and open 
 </div>
 """, unsafe_allow_html=True)
 
-
 # ════════════════════════════════════════════════════════════════
 # TAB 2 — Upload CSV
 # ════════════════════════════════════════════════════════════════
@@ -288,7 +304,6 @@ with tab2:
         except Exception as e:
             st.error(f"Error: {e}")
 
-
 # ════════════════════════════════════════════════════════════════
 # TAB 4 — Stats
 # ════════════════════════════════════════════════════════════════
@@ -313,20 +328,18 @@ with tab4:
 </div>
 """, unsafe_allow_html=True)
 
-
 # ════════════════════════════════════════════════════════════════
 # TAB 3 — Auto-Classify Timeline (EVENT-BASED CHUNKING)
 # ════════════════════════════════════════════════════════════════
 with tab3:
     st.markdown("#### 🔬 Auto-classify by Activity Segments")
-    st.caption("Upload a CSV. The `movement_detector` will automatically crop the silence, cut out the 'wiggles', and predict each chunk.")
+    st.caption("Upload a CSV. The system will automatically cut out the active parts and predict each chunk.")
 
     label_file = st.file_uploader(
         "Upload merged CSV (timestamp, x, y, z)", type=["csv"], key="label_upload"
     )
 
     if label_file:
-        # ── Load CSV ──────────────────────────────────────────────
         raw_bytes = label_file.read()
         ldf = None
         for enc in ['utf-8-sig', 'utf-8', 'utf-16', 'utf-16-le', 'utf-16-be', 'cp1252', 'latin-1']:
@@ -344,7 +357,6 @@ with tab3:
 
         n_rows = len(ldf)
 
-        # ── Parse timestamps → real datetime ──────────────────────
         ts_col = next((c for c in ldf.columns if 'time' in c.lower()), None)
         if ts_col:
             ts_raw = pd.to_numeric(ldf[ts_col], errors='coerce').ffill()
@@ -359,7 +371,7 @@ with tab3:
 
         total_sec = float(ldf['seconds'].iloc[-1])
         
-        # 💡 NEW: Robust Hz calculation that ignores big empty gaps
+        # Robust Hz calculation that ignores big empty gaps
         diffs = ldf['seconds'].diff().dropna()
         normal_diffs = diffs[diffs < 1.0]
         if len(normal_diffs) > 0 and normal_diffs.median() > 0:
@@ -368,20 +380,19 @@ with tab3:
             hz_est = 60
         hz_est = max(10, min(hz_est, 200))
 
-        st.success(f"✓ {n_rows:,} rows · {total_sec:.1f} s · Detected ~{hz_est} Hz Sampling Rate")
+        st.success(f"✓ {n_rows:,} rows · Total Time Span: {total_sec:.1f} s · Detected ~{hz_est} Hz Sampling Rate")
 
-        # ── Full waveform plot ────────────────────────────────────
+        # Full waveform plot
         plot_df = ldf[['x','y','z']].copy()
         plot_df.index = ldf['seconds']
         st.line_chart(plot_df, use_container_width=True, height=200)
 
         st.markdown("---")
 
-        # ── USE OUR NEW IMPORT TO GET SEGMENTS ────────────────────
-        # Threshold set to 0.15 to perfectly segment active blocks from timeline data
+        # Use the built-in function to get segments
         segments = detect_segments(ldf, hz_est=hz_est, threshold=0.15, min_window=WINDOW_SIZE)
 
-        # ── Predict on each isolated segment ──────────────────────
+        # Predict on each isolated segment
         results = []
         xyz = ldf[['x','y','z']].values
         
@@ -392,10 +403,8 @@ with tab3:
             st.info("No clear drinking activity detected! Try lowering the threshold in `detect_segments` if your movements are very gentle.")
         else:
             for i, (s_idx, e_idx) in enumerate(segments):
-                # 1. Isolate the "wiggle" data
                 segment_data = xyz[s_idx : e_idx + 1].tolist()
                 
-                # 2. Extract features and predict
                 feats = extract_features(segment_data)
                 scaled = scaler.transform(feats)
                 pred = int(model.predict(scaled)[0])
@@ -418,13 +427,11 @@ with tab3:
                     'Confidence':  f"{conf_pct:.1f}%",
                 })
                 
-                # Tag the rows in the main dataframe for export
                 ldf.loc[s_idx:e_idx, 'label'] = label
                 ldf.loc[s_idx:e_idx, 'confidence'] = conf_pct
 
             res_df = pd.DataFrame(results)
 
-            # ── Display the results ───────────────────────────────────
             st.markdown("#### 📋 Detected Activities")
             for _, row in res_df.iterrows():
                 try:
@@ -444,7 +451,6 @@ with tab3:
             st.markdown("#### Segment Details Table")
             st.dataframe(res_df, use_container_width=True, hide_index=True)
 
-        # ── Export ────────────────────────────────────────────────
         out_df = ldf.copy()
         out_df['datetime'] = out_df['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S.%f')
         
