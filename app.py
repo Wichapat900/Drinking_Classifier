@@ -125,7 +125,7 @@ if model is None:
     st.stop()
 
 # ── Tabs ──────────────────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs(["📱 Live Record", "📂 Upload CSV", "📊 Stats"])
+tab1, tab2, tab3, tab4 = st.tabs(["📱 Live Record", "📂 Upload CSV", "🏷️ Label CSV", "📊 Stats"])
 
 # ════════════════════════════════════════════════════════════════
 # TAB 1 — Built-in accelerometer
@@ -264,15 +264,15 @@ function downloadCSV() {
     }
     let csv = 'timestamp,x,y,z\\n';
     sensorData.forEach(row => { csv += row.join(',') + '\\n'; });
-    // Create the link in the PARENT window so Streamlit's iframe doesn't intercept it
-    let a = window.parent.document.createElement('a');
-    a.href = 'data:text/csv,' + encodeURIComponent(csv);
-    a.download = 'accelerometer_data.csv';
-    window.parent.document.body.appendChild(a);
-    a.click();
-    window.parent.document.body.removeChild(a);
+    let uri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+    // window.open on the parent triggers the browser's native Save/Share on iOS
+    let w = window.parent.open(uri, '_blank');
+    if (!w) {
+        // Popup blocked fallback — open directly in this frame
+        window.open(uri, '_blank');
+    }
     document.getElementById('status').style.color = '#51cf66';
-    document.getElementById('status').textContent = 'CSV downloaded! Upload it in the Upload CSV tab.';
+    document.getElementById('status').textContent = 'Opened! Tap Share → Save to Files, then upload in Upload CSV tab.';
 }
 </script>
 </body>
@@ -334,7 +334,7 @@ with tab2:
 # ════════════════════════════════════════════════════════════════
 # TAB 3 — Stats
 # ════════════════════════════════════════════════════════════════
-with tab3:
+with tab4:
     st.markdown("#### What makes each drink different?")
     stats_df = pd.DataFrame({
         "Drink":        ["☕ Hot Coffee",  "🍓 Smoothie",     "💧 Water"],
@@ -354,6 +354,135 @@ with tab3:
 4. <b>Jerk std</b> — Water shows sudden pickup/putdown acceleration bursts
 </div>
 """, unsafe_allow_html=True)
+
+# ════════════════════════════════════════════════════════════════
+# TAB 3 — Label CSV
+# ════════════════════════════════════════════════════════════════
+with tab3:
+    st.markdown("#### 🏷️ Label a merged recording")
+    st.caption("Upload a CSV that contains multiple activities. Mark the start/end time of each activity, then export a labelled CSV.")
+
+    label_file = st.file_uploader("Upload merged CSV (timestamp, x, y, z)", type=["csv"], key="label_upload")
+
+    if label_file:
+        ldf = pd.read_csv(label_file)
+        if not {'x','y','z'}.issubset(ldf.columns):
+            st.error(f"Need x, y, z columns. Found: {list(ldf.columns)}")
+        else:
+            # Normalise timestamp to seconds from start
+            ts_col = [c for c in ldf.columns if 'time' in c.lower()]
+            if ts_col:
+                ldf['_ts'] = ldf[ts_col[0]]
+            else:
+                ldf['_ts'] = range(len(ldf))
+
+            t_min = int(ldf['_ts'].min())
+            t_max = int(ldf['_ts'].max())
+            t_range = t_max - t_min
+            is_unix = t_range > 1_000_000   # millisecond unix timestamps
+
+            if is_unix:
+                ldf['_sec'] = (ldf['_ts'] - t_min) / 1000.0
+            else:
+                ldf['_sec'] = (ldf['_ts'] - t_min)
+
+            total_sec = float(ldf['_sec'].max())
+            st.success(f"✓ {len(ldf)} rows · {total_sec:.1f}s total")
+
+            # Show full waveform
+            st.line_chart(ldf[['x','y','z']].rename(columns={'x':'X','y':'Y','z':'Z'}),
+                          use_container_width=True, height=200)
+
+            st.markdown("---")
+            st.markdown("#### Define activity segments")
+            st.caption("Add one row per activity. Set the start/end time (in seconds from recording start).")
+
+            DRINK_OPTIONS = ["☕ Hot Coffee", "🍓 Strawberry Smoothie", "💧 Bottle of Water"]
+
+            # Initialise segment list in session state
+            if "label_segments" not in st.session_state:
+                st.session_state["label_segments"] = [
+                    {"activity": DRINK_OPTIONS[0], "start": 0.0, "end": total_sec / 3},
+                ]
+
+            segs = st.session_state["label_segments"]
+
+            # Render each segment row
+            to_delete = None
+            for i, seg in enumerate(segs):
+                c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
+                with c1:
+                    seg["activity"] = st.selectbox("Activity", DRINK_OPTIONS,
+                        index=DRINK_OPTIONS.index(seg["activity"]) if seg["activity"] in DRINK_OPTIONS else 0,
+                        key=f"act_{i}", label_visibility="collapsed")
+                with c2:
+                    seg["start"] = st.number_input("Start (s)", min_value=0.0, max_value=total_sec,
+                        value=float(seg["start"]), step=0.5, key=f"s_{i}", label_visibility="collapsed")
+                with c3:
+                    seg["end"] = st.number_input("End (s)", min_value=0.0, max_value=total_sec,
+                        value=float(seg["end"]), step=0.5, key=f"e_{i}", label_visibility="collapsed")
+                with c4:
+                    if st.button("✕", key=f"del_{i}"):
+                        to_delete = i
+
+            if to_delete is not None:
+                segs.pop(to_delete)
+                st.rerun()
+
+            col_add, col_gap = st.columns([1, 3])
+            with col_add:
+                if st.button("＋ Add segment", use_container_width=True):
+                    last_end = segs[-1]["end"] if segs else 0.0
+                    next_end = min(last_end + total_sec / 3, total_sec)
+                    segs.append({"activity": DRINK_OPTIONS[0], "start": last_end, "end": next_end})
+                    st.rerun()
+
+            st.markdown("---")
+
+            # Preview what each segment covers
+            if segs:
+                st.markdown("#### Segment preview")
+                for seg in segs:
+                    mask = (ldf['_sec'] >= seg["start"]) & (ldf['_sec'] <= seg["end"])
+                    n = mask.sum()
+                    dur = seg["end"] - seg["start"]
+                    st.markdown(f"**{seg['activity']}** — {seg['start']:.1f}s → {seg['end']:.1f}s &nbsp;·&nbsp; {dur:.1f}s &nbsp;·&nbsp; {n} rows")
+
+                st.markdown("---")
+
+                # Build labelled export
+                if st.button("📦 Export labelled CSV", use_container_width=True):
+                    ldf['label'] = "unlabelled"
+                    for seg in segs:
+                        mask = (ldf['_sec'] >= seg["start"]) & (ldf['_sec'] <= seg["end"])
+                        ldf.loc[mask, 'label'] = seg["activity"]
+
+                    # Build output: timestamp, x, y, z, label, seconds_from_start
+                    out_cols = [c for c in ldf.columns if c not in ('_ts','_sec','label')] + ['label']
+                    out_df = ldf[out_cols].copy()
+
+                    # Also add a human-readable seconds column
+                    out_df.insert(1, 'seconds', ldf['_sec'].round(3))
+
+                    csv_out = out_df.to_csv(index=False)
+
+                    st.download_button(
+                        label="⬇️ Download labelled CSV",
+                        data=csv_out,
+                        file_name="labelled_recording.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                    )
+
+                    # Show summary
+                    summary = ldf.groupby('label').agg(
+                        rows=('label','count'),
+                        start_s=('_sec','min'),
+                        end_s=('_sec','max'),
+                    ).reset_index()
+                    st.dataframe(summary.rename(columns={
+                        'label':'Activity','rows':'Rows','start_s':'Start (s)','end_s':'End (s)'}),
+                        use_container_width=True, hide_index=True)
 
 # ── Footer ────────────────────────────────────────────────────
 st.markdown(
